@@ -34,6 +34,19 @@ export const ACTIVATION_STEPS = [
   "COMPLETE_ACTIVATION",
 ] as const;
 export type ActivationStepName = (typeof ACTIVATION_STEPS)[number];
+
+export const OFFBOARDING_STEPS = [
+  "VALIDATE_OFFBOARDING_APPROVAL",
+  "REVOKE_FOUNDRY_ACCESS",
+  "DISCONNECT_INTEGRATIONS",
+  "PREPARE_PERMITTED_DATA_EXPORT",
+  "ARCHIVE_OPEN_TASKS",
+  "ARCHIVE_NOTION_PROJECTIONS",
+  "ARCHIVE_SLACK_CHANNELS",
+  "REQUEST_FINAL_FINANCIAL_RECONCILIATION",
+  "MARK_CREATOR_FORMER",
+] as const;
+export type OffboardingStepName = (typeof OFFBOARDING_STEPS)[number];
 export type WorkflowStepStatus =
   | "PENDING"
   | "READY"

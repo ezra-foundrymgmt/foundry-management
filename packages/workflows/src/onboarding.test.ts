@@ -6,7 +6,12 @@ import {
   type NotionProvider,
   type ProvisionedResource,
 } from "@creatoros/integrations";
-import { MemoryOnboardingRepository, OnboardingService, type OnboardingCreator } from "./index";
+import {
+  MemoryOnboardingRepository,
+  OFFBOARDING_STEPS,
+  OnboardingService,
+  type OnboardingCreator,
+} from "./index";
 
 const madison: OnboardingCreator = {
   id: "madison",
@@ -131,5 +136,21 @@ describe("CREATOR_ACTIVATION_V1", () => {
     expect(resumed.status).toBe("WAITING_EXTERNAL");
     expect(slack.attempts).toBe(2);
     expect(notion.hubAttempts).toBe(2);
+  });
+});
+
+describe("CREATOR_OFFBOARDING_V1", () => {
+  it("defines a conservative manual-first offboarding sequence", () => {
+    expect(OFFBOARDING_STEPS).toEqual([
+      "VALIDATE_OFFBOARDING_APPROVAL",
+      "REVOKE_FOUNDRY_ACCESS",
+      "DISCONNECT_INTEGRATIONS",
+      "PREPARE_PERMITTED_DATA_EXPORT",
+      "ARCHIVE_OPEN_TASKS",
+      "ARCHIVE_NOTION_PROJECTIONS",
+      "ARCHIVE_SLACK_CHANNELS",
+      "REQUEST_FINAL_FINANCIAL_RECONCILIATION",
+      "MARK_CREATOR_FORMER",
+    ]);
   });
 });

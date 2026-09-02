@@ -19,3 +19,7 @@ Operational provisioning completes before baseline readiness. Activation becomes
 ## Completion criteria
 
 All deterministic setup and mock provisioning steps must succeed, integration requests and reporting schedules must exist, baseline readiness must be true, and the final activation step must succeed. The workflow emits and audits state changes throughout.
+
+## Offboarding placeholder
+
+`CREATOR_OFFBOARDING_V1` is seeded as a manual-first definition. It models approval, Foundry access revocation, integration disconnection, permitted data export, projection and task archival, final financial reconciliation, and the final `FORMER` status. V1 intentionally does not auto-execute these destructive actions.

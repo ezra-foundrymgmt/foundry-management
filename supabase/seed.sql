@@ -16,7 +16,9 @@ insert into public.creator_revenue_daily(organization_id,creator_id,date,platfor
 values ('00000000-0000-4000-8000-000000000001','20000000-0000-4000-8000-000000000001','2026-09-02','CREATOR_REVENUE',1482,63,18,228,'DEMO_SEED','MEASURED');
 
 insert into public.workflow_definitions(id,organization_id,name,version,description,steps_json)
-values ('30000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000001','CREATOR_ACTIVATION_V1',1,'Deterministic 26-step creator activation','[]');
+values
+('30000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000001','CREATOR_ACTIVATION_V1',1,'Deterministic 26-step creator activation','[]'),
+('30000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000001','CREATOR_OFFBOARDING_V1',1,'Manual-first access revocation and archive sequence','["VALIDATE_OFFBOARDING_APPROVAL","REVOKE_FOUNDRY_ACCESS","DISCONNECT_INTEGRATIONS","PREPARE_PERMITTED_DATA_EXPORT","ARCHIVE_OPEN_TASKS","ARCHIVE_NOTION_PROJECTIONS","ARCHIVE_SLACK_CHANNELS","REQUEST_FINAL_FINANCIAL_RECONCILIATION","MARK_CREATOR_FORMER"]');
 
 insert into public.tool_definitions(organization_id,name,version,description,risk_level,required_permission,requires_human_approval) values
 ('00000000-0000-4000-8000-000000000001','search_creator',1,'Search tenant-scoped creator records',0,'creator.read',false),
