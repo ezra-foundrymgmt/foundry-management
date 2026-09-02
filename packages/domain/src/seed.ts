@@ -1,0 +1,243 @@
+import { generateDailyReport } from "./revenue-diagnostic";
+import type { ContentPerformance, CreatorSummary, MetricPoint, Prospect, Task } from "./types";
+
+export const DEMO_ORGANIZATION = {
+  id: "00000000-0000-4000-8000-000000000001",
+  name: "Foundry Management",
+  slug: "foundry",
+} as const;
+
+export const creators: CreatorSummary[] = [
+  {
+    id: "madison",
+    creatorNumber: "CR-000001",
+    stageName: "Madison Carter",
+    preferredName: "Madison",
+    status: "ONBOARDING",
+    healthScore: 71,
+    healthBand: "WATCH",
+    monthlyRevenue: 42180,
+    revenueTrendPercent: 13.2,
+    contentBufferDays: 8,
+    owner: "Nina Park",
+    integrationHealth: "WAITING",
+    primaryBottleneck: "First-purchase monetization",
+    latestReportDate: "2026-09-02",
+  },
+  {
+    id: "ava",
+    creatorNumber: "CR-000002",
+    stageName: "Ava Monroe",
+    preferredName: "Ava",
+    status: "ACTIVE",
+    healthScore: 89,
+    healthBand: "GREEN",
+    monthlyRevenue: 58320,
+    revenueTrendPercent: 18.4,
+    contentBufferDays: 19,
+    owner: "Nina Park",
+    integrationHealth: "HEALTHY",
+    primaryBottleneck: "No material bottleneck",
+    latestReportDate: "2026-09-02",
+  },
+  {
+    id: "sarah",
+    creatorNumber: "CR-000003",
+    stageName: "Sarah Vale",
+    preferredName: "Sarah",
+    status: "WATCH",
+    healthScore: 58,
+    healthBand: "AT_RISK",
+    monthlyRevenue: 27740,
+    revenueTrendPercent: -11.8,
+    contentBufferDays: 5,
+    owner: "Owen Reed",
+    integrationHealth: "DEGRADED",
+    primaryBottleneck: "Organic acquisition / content reach",
+    latestReportDate: "2026-09-02",
+  },
+];
+
+export const prospects: Prospect[] = [
+  {
+    id: "jessica",
+    prospectNumber: "PR-000001",
+    preferredName: "Jessica",
+    stageName: "Jessica Hart",
+    niche: "Fitness & lifestyle",
+    followerCountEstimate: 184000,
+    fitScore: 87,
+    fitTier: "PRIORITY",
+    pipelineStage: "SIGNED",
+    owner: "Owen Reed",
+    nextFollowupAt: "2026-09-04",
+  },
+  {
+    id: "lena",
+    prospectNumber: "PR-000002",
+    preferredName: "Lena",
+    stageName: "Lena North",
+    niche: "Beauty",
+    followerCountEstimate: 96000,
+    fitScore: 76,
+    fitTier: "QUALIFIED",
+    pipelineStage: "AUDIT",
+    owner: "Nina Park",
+    nextFollowupAt: "2026-09-03",
+  },
+  {
+    id: "maya",
+    prospectNumber: "PR-000003",
+    preferredName: "Maya",
+    stageName: "Maya Stone",
+    niche: "Humor & POV",
+    followerCountEstimate: 241000,
+    fitScore: 68,
+    fitTier: "NURTURE",
+    pipelineStage: "FOLLOW_UP",
+    owner: "Owen Reed",
+    nextFollowupAt: "2026-09-09",
+  },
+];
+
+export const tasks: Task[] = [
+  {
+    id: "task-1",
+    creatorId: "madison",
+    title: "Review first-purchase offer performance",
+    department: "Revenue",
+    priority: "HIGH",
+    status: "OPEN",
+    owner: "Revenue Lead",
+    dueAt: "2026-09-03",
+    sourceType: "REPORT",
+    sourceId: "report-madison-2026-09-02",
+  },
+  {
+    id: "task-2",
+    creatorId: "sarah",
+    title: "Run content replenishment sprint",
+    department: "Creator Success",
+    priority: "CRITICAL",
+    status: "IN_PROGRESS",
+    owner: "Owen Reed",
+    dueAt: "2026-09-02",
+    sourceType: "REPORT",
+    sourceId: "report-sarah-2026-09-02",
+  },
+  {
+    id: "task-3",
+    creatorId: "ava",
+    title: "Produce four Relationship POV variants",
+    department: "Creative",
+    priority: "MEDIUM",
+    status: "REVIEW",
+    owner: "Mara Chen",
+    dueAt: "2026-09-05",
+    sourceType: "MANUAL",
+    sourceId: null,
+  },
+];
+
+const madisonCurrent: MetricPoint = {
+  date: "2026-09-02",
+  reach: 186400,
+  profileVisits: 5810,
+  outboundClicks: 1241,
+  newSubscribers: 63,
+  firstBuyers: 18,
+  revenue: 1482,
+};
+const madisonBaseline: MetricPoint = {
+  date: "baseline",
+  reach: 150300,
+  profileVisits: 4435,
+  outboundClicks: 1070,
+  newSubscribers: 58,
+  firstBuyers: 20,
+  revenue: 1312,
+};
+const avaCurrent: MetricPoint = {
+  date: "2026-09-02",
+  reach: 224900,
+  profileVisits: 7200,
+  outboundClicks: 1610,
+  newSubscribers: 81,
+  firstBuyers: 31,
+  revenue: 2015,
+};
+const avaBaseline: MetricPoint = {
+  date: "baseline",
+  reach: 178000,
+  profileVisits: 5900,
+  outboundClicks: 1320,
+  newSubscribers: 69,
+  firstBuyers: 25,
+  revenue: 1744,
+};
+const sarahCurrent: MetricPoint = {
+  date: "2026-09-02",
+  reach: 84300,
+  profileVisits: 2290,
+  outboundClicks: 498,
+  newSubscribers: 24,
+  firstBuyers: 8,
+  revenue: 834,
+};
+const sarahBaseline: MetricPoint = {
+  date: "baseline",
+  reach: 122200,
+  profileVisits: 3510,
+  outboundClicks: 790,
+  newSubscribers: 39,
+  firstBuyers: 13,
+  revenue: 1020,
+};
+
+export const reports = [
+  generateDailyReport({
+    creatorId: "madison",
+    reportDate: "2026-09-02",
+    current: madisonCurrent,
+    baseline: madisonBaseline,
+    healthBand: "WATCH",
+    contentBufferDays: 8,
+  }),
+  generateDailyReport({
+    creatorId: "ava",
+    reportDate: "2026-09-02",
+    current: avaCurrent,
+    baseline: avaBaseline,
+    healthBand: "GREEN",
+    contentBufferDays: 19,
+  }),
+  generateDailyReport({
+    creatorId: "sarah",
+    reportDate: "2026-09-02",
+    current: sarahCurrent,
+    baseline: sarahBaseline,
+    healthBand: "AT_RISK",
+    contentBufferDays: 5,
+  }),
+];
+
+export const contentPerformance: ContentPerformance[] = [
+  {
+    id: "post-1",
+    title: "Relationship POV #3",
+    franchise: "Relationship POV",
+    primaryMetric: 220000,
+    rollingMedian: 100000,
+    multiplier: 2.2,
+    status: "OPPORTUNITY",
+  },
+  {
+    id: "post-2",
+    title: "Gym Mirror #2",
+    franchise: "Gym Mirror",
+    primaryMetric: 63000,
+    rollingMedian: 100000,
+    multiplier: 0.63,
+    status: "WEAK",
+  },
+];
