@@ -3,10 +3,13 @@ import { Filter, Plus, Search } from "lucide-react";
 import { ConvertProspectButton } from "@/components/convert-prospect-button";
 import { DemoStrip, PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
+import { isMockMode } from "@/lib/environment";
+import { getLiveProspects } from "@/lib/live-data";
 
 const visibleStages = ["FOLLOW_UP", "AUDIT", "DISCOVERY", "SIGNED"] as const;
 
-export default function ProspectsPage() {
+export default async function ProspectsPage() {
+  const prospectRecords = isMockMode() ? prospects : await getLiveProspects();
   return (
     <main className="page">
       <DemoStrip />
@@ -49,7 +52,7 @@ export default function ProspectsPage() {
       </div>
       <section className="grid kanban" aria-label="Prospect pipeline">
         {visibleStages.map((stage) => {
-          const items = prospects.filter((prospect) => prospect.pipelineStage === stage);
+          const items = prospectRecords.filter((prospect) => prospect.pipelineStage === stage);
           return (
             <div className="kanban-column" key={stage}>
               <div className="kanban-head">

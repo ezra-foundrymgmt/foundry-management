@@ -5,11 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "next dev",
+    "prebuild": "node scripts/validate-env.mjs",
     "build": "next build",
     "lint": "eslint src next.config.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:e2e": "node scripts/run-e2e.mjs"
+    "test:e2e": "node scripts/run-e2e.mjs",
+    "verify:live": "node scripts/verify-live.mjs",
+    "validate:env": "node scripts/validate-env.mjs"
   },
   "dependencies": {
     "@creatoros/domain": "workspace:*",

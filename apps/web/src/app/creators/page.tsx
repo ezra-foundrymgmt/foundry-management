@@ -3,13 +3,16 @@ import { creators } from "@creatoros/domain";
 import { Filter, Plus, Search } from "lucide-react";
 import { DemoStrip, PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
+import { isMockMode } from "@/lib/environment";
+import { getLiveCreators } from "@/lib/live-data";
 
 const money = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
   maximumFractionDigits: 0,
 });
-export default function CreatorsPage() {
+export default async function CreatorsPage() {
+  const creatorRecords = isMockMode() ? creators : await getLiveCreators();
   return (
     <main className="page">
       <DemoStrip />
@@ -31,7 +34,7 @@ export default function CreatorsPage() {
             <Filter size={13} /> Filters
           </button>
           <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--ink-soft)" }}>
-            {creators.length} creators
+            {creatorRecords.length} creators
           </span>
         </div>
         <div className="table-wrap">
@@ -49,7 +52,7 @@ export default function CreatorsPage() {
               </tr>
             </thead>
             <tbody>
-              {creators.map((creator) => (
+              {creatorRecords.map((creator) => (
                 <tr key={creator.id}>
                   <td>
                     <Link href={`/creators/${creator.id}`}>

@@ -22,6 +22,7 @@
     "@types/node": "latest",
     "eslint": "latest",
     "eslint-config-prettier": "latest",
+    "next": "latest",
     "prettier": "latest",
     "pnpm": "11.25.0",
     "turbo": "latest",

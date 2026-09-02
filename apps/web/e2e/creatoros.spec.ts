@@ -94,3 +94,19 @@ test("WebMCP tools register and use the same tenant-scoped search", async ({ pag
   });
   expect(invalidRejected).toBe(true);
 });
+
+test("integration registry and installable PWA assets are navigable", async ({ page, request }) => {
+  await page.goto("/settings/integrations");
+  await expect(page.getByRole("heading", { name: "Integrations" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Slack" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Notion" })).toBeVisible();
+  await expect(page.getByText("OAuth state is single-use")).toBeVisible();
+  const manifest = await request.get("/manifest.webmanifest");
+  expect(manifest.ok()).toBeTruthy();
+  expect(await manifest.json()).toMatchObject({
+    name: "CreatorOS — Foundry Management",
+    display: "standalone",
+  });
+  expect((await request.get("/icons/192")).headers()["content-type"]).toContain("image/png");
+  expect((await request.get("/icons/512")).headers()["content-type"]).toContain("image/png");
+});

@@ -38,13 +38,13 @@ const nav = [
   { section: "Intelligence" },
   { label: "Reports", href: "/reports", icon: BarChart3 },
   { label: "Economics", href: "/economics", icon: BriefcaseBusiness },
-  { label: "Integrations", href: "/integrations", icon: Plug },
+  { label: "Integrations", href: "/settings/integrations", icon: Plug },
   { label: "Incidents", href: "/incidents", icon: ShieldAlert },
   { label: "Audit", href: "/audit", icon: Activity },
   { label: "Settings", href: "/settings", icon: Settings },
 ] as const;
 
-const searchable = [
+const demoSearchable = [
   ...creators.map((item) => ({
     label: item.stageName,
     sub: `Creator · ${item.creatorNumber}`,
@@ -63,7 +63,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const [commandOpen, setCommandOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [liveResults, setLiveResults] = useState<typeof demoSearchable>([]);
   const inputRef = useRef<HTMLInputElement>(null);
+  const demo = process.env["NEXT_PUBLIC_CREATOROS_DEMO_MODE"] !== "false";
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
@@ -78,12 +80,42 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (commandOpen) inputRef.current?.focus();
   }, [commandOpen]);
+  useEffect(() => {
+    if (demo || query.trim().length < 2) {
+      setLiveResults([]);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void fetch(`/api/search?q=${encodeURIComponent(query)}`, { signal: controller.signal })
+        .then((response) => response.json())
+        .then((body: { data?: Array<{ type: string; id: string; label: string }> }) =>
+          setLiveResults(
+            (body.data ?? []).map((item) => ({
+              label: item.label,
+              sub: item.type,
+              href:
+                item.type === "creator"
+                  ? `/creators/${item.id}`
+                  : item.type === "prospect"
+                    ? "/crm/prospects"
+                    : "/tasks",
+            })),
+          ),
+        )
+        .catch(() => undefined);
+    }, 180);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [demo, query]);
   const results = useMemo(
     () =>
-      searchable
+      (demo ? demoSearchable : liveResults)
         .filter((item) => `${item.label} ${item.sub}`.toLowerCase().includes(query.toLowerCase()))
         .slice(0, 8),
-    [query],
+    [demo, liveResults, query],
   );
   const isActive = (href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href));
   const navigate = (href: string) => {
@@ -134,8 +166,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <a className="icon-button" aria-label="Notifications and incidents" href="/incidents">
               <Bell size={16} />
             </a>
-            <div className="avatar" title="Alex Morgan · Super Admin">
-              AM
+            <div
+              className="avatar"
+              title={demo ? "Alex Morgan · Demo Super Admin" : "Foundry member"}
+            >
+              {demo ? "AM" : "FM"}
             </div>
           </div>
         </div>

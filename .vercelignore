@@ -1,0 +1,15 @@
+.git
+.pnpm-store
+.turbo
+node_modules
+sources
+**/.next
+**/node_modules
+**/test-results
+**/playwright-report
+.env
+.env.*
+!.env.example
+!.env.staging.example
+!.env.production.example
+

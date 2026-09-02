@@ -22,12 +22,16 @@ export function PageHeader({
 }
 
 export function DemoStrip() {
+  const demo = process.env["NEXT_PUBLIC_CREATOROS_DEMO_MODE"] !== "false";
   return (
-    <div className="demo-strip">
+    <div className={`demo-strip ${demo ? "" : "live-strip"}`}>
       <span>
-        <strong>DEMO MODE</strong> · Fictional operating data · Mock integrations
+        <strong>{demo ? "DEMO MODE" : "LIVE ENVIRONMENT"}</strong> ·{" "}
+        {demo
+          ? "Fictional operating data · Mock integrations"
+          : "Authenticated Foundry data · Audited integrations"}
       </span>
-      <span>Last refreshed 8:30 AM CT</span>
+      <span>{demo ? "Safe to explore" : "CreatorOS is the source of truth"}</span>
     </div>
   );
 }

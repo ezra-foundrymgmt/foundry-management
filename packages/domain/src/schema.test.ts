@@ -79,6 +79,76 @@ describe("CreatorOS database migration", () => {
     );
     expect(result.rows[0]?.count).toBeGreaterThanOrEqual(50);
   });
+  it("blocks direct cross-organization records and credential-table reads", async () => {
+    const userId = "40000000-0000-4000-8000-000000000001";
+    const otherOrg = "00000000-0000-4000-8000-000000000099";
+    await database.exec(`
+      set role service_role;
+      insert into public.creators(
+        organization_id, preferred_name, stage_name, email, timezone, start_date,
+        contract_status, jurisdiction_review_status, adult_confirmation_status
+      ) values (
+        '${otherOrg}','Other','Other Creator','other@example.test','UTC',current_date,
+        'SIGNED','APPROVED','CONFIRMED'
+      );
+      reset role;
+      set request.jwt.claim.sub = '${userId}';
+      set role authenticated;
+    `);
+    try {
+      const visible = await database.query<{ count: number }>(
+        `select count(*)::int as count from public.creators where organization_id='${otherOrg}'`,
+      );
+      expect(visible.rows[0]?.count).toBe(0);
+      await expect(
+        database.query("select * from public.integration_credentials"),
+      ).rejects.toThrow();
+    } finally {
+      await database.exec("reset role");
+    }
+  });
+
+  it("consumes OAuth state once and rejects the wrong actor", async () => {
+    const userId = "40000000-0000-4000-8000-000000000001";
+    const orgId = "00000000-0000-4000-8000-000000000001";
+    await database.exec(`
+      set role service_role;
+      insert into public.oauth_states(organization_id,user_id,provider,state_hash,redirect_uri,expires_at)
+      values ('${orgId}','${userId}','SLACK','state-hash','https://example.test/callback',now()+interval '10 minutes');
+    `);
+    try {
+      const wrong = await database.query<{ redirect_uri: string }>(
+        `select * from public.consume_oauth_state('state-hash','SLACK','40000000-0000-4000-8000-000000000099','${orgId}')`,
+      );
+      expect(wrong.rows).toHaveLength(0);
+      const first = await database.query<{ redirect_uri: string }>(
+        `select * from public.consume_oauth_state('state-hash','SLACK','${userId}','${orgId}')`,
+      );
+      expect(first.rows).toEqual([{ redirect_uri: "https://example.test/callback" }]);
+      const replay = await database.query<{ redirect_uri: string }>(
+        `select * from public.consume_oauth_state('state-hash','SLACK','${userId}','${orgId}')`,
+      );
+      expect(replay.rows).toHaveLength(0);
+    } finally {
+      await database.exec("reset role");
+    }
+  });
+
+  it("enforces a shared database rate limit", async () => {
+    await database.exec("set role service_role");
+    try {
+      const results: boolean[] = [];
+      for (let index = 0; index < 3; index += 1) {
+        const result = await database.query<{ allowed: boolean }>(
+          "select public.consume_api_rate_limit('test-key',2,60) as allowed",
+        );
+        results.push(result.rows[0]?.allowed ?? false);
+      }
+      expect(results).toEqual([true, true, false]);
+    } finally {
+      await database.exec("reset role");
+    }
+  });
   it("converts a signed prospect atomically and idempotently", async () => {
     const prospectId = "90000000-0000-4000-8000-000000000001";
     await database.exec(`

@@ -31,7 +31,10 @@ export function LoginForm() {
       const client = createSupabaseBrowserClient();
       const { error } = await client.auth.signInWithOtp({
         email,
-        options: { emailRedirectTo: window.location.origin },
+        options: {
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
+          shouldCreateUser: false,
+        },
       });
       if (error) throw error;
       setMessage("Check your email for the secure sign-in link.");

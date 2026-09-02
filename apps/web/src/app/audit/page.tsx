@@ -1,7 +1,9 @@
 import { Download, Filter } from "lucide-react";
 import { DemoStrip, PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
-const events = [
+import { isMockMode } from "@/lib/environment";
+import { getLiveAuditEvents } from "@/lib/live-data";
+const demoEvents = [
   {
     action: "creator.onboarding.started",
     resource: "Madison Carter",
@@ -35,7 +37,8 @@ const events = [
     correlation: "corr_144c",
   },
 ];
-export default function AuditPage() {
+export default async function AuditPage() {
+  const events = isMockMode() ? demoEvents : await getLiveAuditEvents();
   return (
     <main className="page">
       <DemoStrip />

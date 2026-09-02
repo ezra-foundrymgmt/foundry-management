@@ -20,9 +20,15 @@ export async function proxy(request: NextRequest) {
   });
   const { data } = await supabase.auth.getUser();
   const isLogin = request.nextUrl.pathname === "/login";
-  if (!data.user && !isLogin) return NextResponse.redirect(new URL("/login", request.url));
+  const isAuthCallback = request.nextUrl.pathname === "/auth/callback";
+  if (!data.user && !isLogin && !isAuthCallback)
+    return NextResponse.redirect(new URL("/login", request.url));
   if (data.user && isLogin) return NextResponse.redirect(new URL("/", request.url));
   return response;
 }
 
-export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico|api/health).*)"] };
+export const config = {
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|sw.js|icons/|api/health|api/inngest).*)",
+  ],
+};

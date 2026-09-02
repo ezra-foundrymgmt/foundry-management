@@ -5,12 +5,15 @@ coverage
 .turbo
 .env
 .env.local
+.env*.local
 playwright-report
 test-results
 .supabase
+supabase/.temp
 .pnpm-store
 *.tsbuildinfo
 /sources/
 /AGENTS.md
 /apps/web/AGENTS.md
 /apps/web/CLAUDE.md
+.vercel

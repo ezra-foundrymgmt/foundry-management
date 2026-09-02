@@ -2,10 +2,8 @@ packages:
   - "apps/*"
   - "packages/*"
 
-onlyBuiltDependencies:
-  - esbuild
-  - sharp
-  - supabase
-
-ignoredBuiltDependencies:
-  - protobufjs
+allowBuilds:
+  esbuild: true
+  protobufjs: false
+  sharp: true
+  supabase: true

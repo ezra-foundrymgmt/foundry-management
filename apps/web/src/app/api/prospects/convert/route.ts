@@ -9,7 +9,7 @@ const schema = z.object({ prospectId: z.string().min(1).max(100) });
 export async function POST(request: Request) {
   try {
     const session = await requirePermission("creator.create");
-    if (!allowRequest(`${session.userId}:prospect-conversion`, 5))
+    if (!(await allowRequest(`${session.userId}:prospect-conversion`, 5)))
       return NextResponse.json({ error: "RATE_LIMITED" }, { status: 429 });
     const parsed = schema.safeParse(await request.json());
     if (!parsed.success)
