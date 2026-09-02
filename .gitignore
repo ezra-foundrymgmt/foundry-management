@@ -1,0 +1,16 @@
+node_modules
+.next
+dist
+coverage
+.turbo
+.env
+.env.local
+playwright-report
+test-results
+.supabase
+.pnpm-store
+*.tsbuildinfo
+/sources/
+/AGENTS.md
+/apps/web/AGENTS.md
+/apps/web/CLAUDE.md

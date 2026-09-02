@@ -1,0 +1,39 @@
+{
+  "name": "@creatoros/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "lint": "eslint src next.config.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "node scripts/run-e2e.mjs"
+  },
+  "dependencies": {
+    "@creatoros/domain": "workspace:*",
+    "@creatoros/integrations": "workspace:*",
+    "@creatoros/workflows": "workspace:*",
+    "@supabase/ssr": "latest",
+    "@supabase/supabase-js": "latest",
+    "@tailwindcss/postcss": "latest",
+    "clsx": "latest",
+    "inngest": "latest",
+    "lucide-react": "latest",
+    "next": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "tailwindcss": "latest",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@playwright/test": "latest",
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "eslint": "latest",
+    "typescript": "^6.0.0",
+    "vitest": "latest"
+  }
+}

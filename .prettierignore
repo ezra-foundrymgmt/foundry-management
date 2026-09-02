@@ -1,0 +1,8 @@
+.next
+dist
+coverage
+pnpm-lock.yaml
+sources
+AGENTS.md
+apps/web/AGENTS.md
+apps/web/CLAUDE.md

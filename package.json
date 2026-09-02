@@ -1,0 +1,32 @@
+{
+  "name": "creatoros",
+  "private": true,
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "dev": "turbo dev --filter=@creatoros/web",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "format": "prettier --check .",
+    "format:write": "prettier --write .",
+    "typecheck": "turbo typecheck",
+    "test": "turbo test",
+    "test:e2e": "pnpm --filter @creatoros/web test:e2e",
+    "db:start": "corepack pnpm dlx supabase@2.116.0 start",
+    "db:reset": "corepack pnpm dlx supabase@2.116.0 db reset",
+    "db:migrate": "corepack pnpm dlx supabase@2.116.0 migration up --local",
+    "seed": "corepack pnpm dlx supabase@2.116.0 db reset",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "@eslint/js": "latest",
+    "@types/node": "latest",
+    "eslint": "latest",
+    "eslint-config-prettier": "latest",
+    "prettier": "latest",
+    "pnpm": "11.25.0",
+    "turbo": "latest",
+    "typescript": "^6.0.0",
+    "typescript-eslint": "latest",
+    "vitest": "latest"
+  }
+}
