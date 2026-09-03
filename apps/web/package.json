@@ -15,6 +15,7 @@
     "validate:env": "node scripts/validate-env.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.123.0",
     "@creatoros/domain": "workspace:*",
     "@creatoros/integrations": "workspace:*",
     "@creatoros/workflows": "workspace:*",

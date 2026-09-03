@@ -29,6 +29,9 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|sw.js|icons/|api/health|api/inngest).*)",
+    // api/slack is excluded because Slack authenticates with a request
+    // signature rather than a session cookie; redirecting it to /login would
+    // break the events endpoint and Slack would retry the redirect forever.
+    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|sw.js|icons/|api/health|api/inngest|api/slack).*)",
   ],
 };

@@ -43,7 +43,7 @@ const schema = z.object({
   ANTHROPIC_API_KEY: optionalSecret,
   FOUNDRY_AGENT_MODEL: z.preprocess(
     blankToUndefined,
-    z.string().trim().min(1).default("claude-sonnet-5"),
+    z.string().trim().min(1).default("claude-opus-5"),
   ),
   SENTRY_DSN: optionalSecret,
   VERCEL_ENV: z.preprocess(
