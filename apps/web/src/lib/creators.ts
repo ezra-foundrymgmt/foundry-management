@@ -116,22 +116,25 @@ export async function updateCreatorPriority(
   if (before.updated_at !== input.updatedAt)
     throw new CreatorError("CREATOR_CHANGED_REFRESH_REQUIRED", 409);
 
-  const updatedAt = new Date().toISOString();
   const { data, error } = await client
     .from("creators")
     .update({
       priority: input.priority,
-      updated_at: updatedAt,
+      updated_at: new Date().toISOString(),
       // Who last touched the record, for the creator page's own display.
       updated_by: session.userId,
     })
     .eq("organization_id", session.organizationId)
     .eq("id", creatorId)
     .eq("updated_at", input.updatedAt)
-    .select("id,priority")
+    // Same reason as patchCreator: return the stored timestamptz, not the
+    // string we sent, or the caller's next token can never match.
+    .select("id,priority,updated_at")
     .maybeSingle();
   if (error) throw databaseFailure("write", error);
   if (!data) throw new CreatorError("CREATOR_CHANGED_REFRESH_REQUIRED", 409);
+  const writtenPriority = z.object({ updated_at: z.string() }).safeParse(data);
+  const updatedAt = writtenPriority.success ? writtenPriority.data.updated_at : input.updatedAt;
 
   /**
    * The priority change above already committed — appendAudit is a second,
@@ -189,17 +192,25 @@ async function patchCreator(
   if (before.updated_at !== input.updatedAt)
     throw new CreatorError("CREATOR_CHANGED_REFRESH_REQUIRED", 409);
 
-  const updatedAt = new Date().toISOString();
   const { data, error } = await client
     .from("creators")
-    .update({ ...patch, updated_at: updatedAt, updated_by: session.userId })
+    .update({ ...patch, updated_at: new Date().toISOString(), updated_by: session.userId })
     .eq("organization_id", session.organizationId)
     .eq("id", creatorId)
     .eq("updated_at", input.updatedAt)
-    .select("id")
+    // Read the stored value back rather than returning the string we sent.
+    // Postgres reports timestamptz with a numeric offset and microsecond
+    // precision (`...312503+00:00`); `new Date().toISOString()` produces
+    // `...312Z`. Returning the latter hands the caller a token that can never
+    // match the next read, so a second consecutive edit always 409s.
+    .select("id,updated_at")
     .maybeSingle();
   if (error) throw databaseFailure("write", error);
   if (!data) throw new CreatorError("CREATOR_CHANGED_REFRESH_REQUIRED", 409);
+  const written = z
+    .object({ updated_at: z.string() })
+    .safeParse(data);
+  const updatedAt = written.success ? written.data.updated_at : input.updatedAt;
 
   try {
     await appendAudit(session, audit.action, "creator", creatorId, {

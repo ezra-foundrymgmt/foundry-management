@@ -111,6 +111,21 @@ describe("compliance gate", () => {
     expect(recorded.some((query) => query.op === "update")).toBe(false);
   });
 
+  it("returns the stored timestamptz so a second consecutive edit is not refused", async () => {
+    // Regression, found live: the writer returned `new Date().toISOString()`
+    // ("...312Z") while Postgres stores and reports "...312503+00:00". A caller
+    // chaining the returned token into its next edit therefore always got
+    // CREATOR_CHANGED_REFRESH_REQUIRED, even alone in the system.
+    const stored = "2026-09-03T21:26:44.312503+00:00";
+    rows = { id: CREATOR, updated_at: STAMP, stage_name: "Test Creator" };
+    writeResult = { id: CREATOR, updated_at: stored };
+    const result = await updateCreatorCompliance(session, CREATOR, {
+      jurisdictionReviewStatus: "APPROVED",
+      updatedAt: STAMP,
+    });
+    expect(result.updatedAt).toBe(stored);
+  });
+
   it("scopes every query to the caller's organization", async () => {
     rows = { id: CREATOR, updated_at: STAMP, stage_name: "Test Creator" };
     writeResult = { id: CREATOR };
