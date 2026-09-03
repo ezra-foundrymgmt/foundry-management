@@ -17,6 +17,14 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
  */
 export type ActivationReadinessStatus = "READY" | "WAITING" | "BLOCKED" | "INCOMPLETE";
 
+/**
+ * The idempotency key of the competitor-research task activation commissions.
+ * Defined here because this module is what asserts the task exists; the record
+ * port imports it rather than the two agreeing on a string by coincidence.
+ */
+export const COMPETITOR_RESEARCH_KEY = (creatorId: string) =>
+  `activation:${creatorId}:competitor-research`;
+
 /** What an unsatisfied check of this kind makes the creator. */
 export type ActivationReadinessSeverity = Exclude<ActivationReadinessStatus, "READY">;
 
@@ -159,7 +167,7 @@ export async function evaluateActivationReadiness(input: {
     count("creator_health_scores"),
     count("creator_pnl_periods"),
     count("content_inventory_snapshots"),
-    count("creator_competitors"),
+    count("tasks", [["idempotency_key", COMPETITOR_RESEARCH_KEY(creatorId)]]),
     count("content_pillars"),
     count("tasks", [["source_type", "CREATOR_ACTIVATION_V1"]]),
     count("social_accounts"),
@@ -246,10 +254,10 @@ export async function evaluateActivationReadiness(input: {
     ),
     check(
       "competitor-research",
-      "Competitor research",
+      "Competitor research commissioned",
       "INCOMPLETE",
       competitors > 0,
-      rows(competitors),
+      competitors > 0 ? "research task open" : "no competitor research task",
     ),
     check("content-pillars", "Content test board", "INCOMPLETE", pillars > 0, rows(pillars)),
     check(

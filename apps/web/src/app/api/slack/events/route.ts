@@ -138,6 +138,12 @@ export async function POST(request: Request) {
         slackEventId: event.event_id,
         slackUserId: event.event.user,
         channelId: event.event.channel,
+        // Slack marks a DM channel with a leading "D". Without this the agent
+        // treated every DM as creator-facing and refused every internal-only
+        // tool there, so a founder asking the agent anything in a DM got a
+        // refusal — while a channel it cannot identify still defaults to
+        // creator-facing, which is the direction that must fail closed.
+        isDirectMessage: (event.event.channel ?? "").startsWith("D"),
         threadTs: event.event.thread_ts ?? event.event.ts,
         prompt: decision.prompt,
         correlationId,

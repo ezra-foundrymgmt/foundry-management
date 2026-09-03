@@ -250,3 +250,38 @@ describe("single scheduler", () => {
     expect(withCron).toEqual([path.join("src", "lib", "inngest.ts")]);
   });
 });
+
+describe("cadence", () => {
+  it("does not regenerate the daily report for a WEEKLY schedule", async () => {
+    // Adversarial review, confirmed: cadence was never branched on, so a WEEKLY
+    // schedule upserted onto the same (creator_id, report_date) row as that
+    // day's daily report and reported PRODUCED — a weekly review that never
+    // existed, reported as running.
+    dueSchedules = [{ ...schedule(SCHEDULE_A, CREATOR_A), cadence: "WEEKLY" }];
+
+    const outcome = await runDueReportSchedules({ now: new Date("2026-09-02T09:00:00Z") });
+
+    expect(produceDailyCreatorReport).not.toHaveBeenCalled();
+    expect(outcome.outcomes[0]).toMatchObject({
+      status: "SKIPPED",
+      reason: "WEEKLY_REVIEW_NOT_IMPLEMENTED",
+    });
+    // Persisted, so an operator can see it on the schedule.
+    expect(resultsFor("record_report_schedule_result")[0]?.args).toMatchObject({
+      p_status: "SKIPPED",
+      p_error: "WEEKLY_REVIEW_NOT_IMPLEMENTED",
+    });
+  });
+
+  it("still runs DAILY schedules in the same batch", async () => {
+    dueSchedules = [
+      { ...schedule(SCHEDULE_A, CREATOR_A), cadence: "WEEKLY" },
+      schedule(SCHEDULE_B, CREATOR_B),
+    ];
+
+    const outcome = await runDueReportSchedules({ now: new Date("2026-09-02T09:00:00Z") });
+
+    expect(outcome.outcomes.map((entry) => entry.status)).toEqual(["SKIPPED", "PRODUCED"]);
+    expect(produceDailyCreatorReport).toHaveBeenCalledTimes(1);
+  });
+});

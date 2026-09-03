@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { creators, prospects, tasks } from "@creatoros/domain";
+import { hasPermission } from "@creatoros/domain";
 import { AuthorizationError, requirePermission } from "@/lib/auth";
 import { isMockMode } from "@/lib/environment";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -11,9 +12,18 @@ export async function GET(request: Request) {
       .toLowerCase()
       .slice(0, 80);
     if (!query) return NextResponse.json({ data: [] });
+    // Adversarial review, confirmed: search was gated on creator.read alone and
+    // then returned prospects and tasks unconditionally. A contractor — whose
+    // whole grant is creator.read and task.complete, and who is refused
+    // /crm/prospects and the prospects API — could walk the entire acquisition
+    // pipeline by iterating the query string. Search is not a separate authority
+    // from the pages it searches.
+    const canSeeProspects = hasPermission(session.role, "prospect.read");
     let values = [
       ...creators.map((item) => ({ type: "creator", id: item.id, label: item.stageName })),
-      ...prospects.map((item) => ({ type: "prospect", id: item.id, label: item.stageName })),
+      ...(canSeeProspects
+        ? prospects.map((item) => ({ type: "prospect", id: item.id, label: item.stageName }))
+        : []),
       ...tasks.map((item) => ({ type: "task", id: item.id, label: item.title })),
     ];
     if (!isMockMode()) {
@@ -27,12 +37,14 @@ export async function GET(request: Request) {
           .eq("organization_id", session.organizationId)
           .ilike("stage_name", pattern)
           .limit(8),
-        client
-          .from("prospects")
-          .select("id,stage_name")
-          .eq("organization_id", session.organizationId)
-          .ilike("stage_name", pattern)
-          .limit(8),
+        canSeeProspects
+          ? client
+              .from("prospects")
+              .select("id,stage_name")
+              .eq("organization_id", session.organizationId)
+              .ilike("stage_name", pattern)
+              .limit(8)
+          : Promise.resolve({ data: [], error: null }),
         client
           .from("tasks")
           .select("id,title")

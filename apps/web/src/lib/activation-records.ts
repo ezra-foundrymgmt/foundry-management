@@ -1,6 +1,6 @@
 import "server-only";
 import type { ActivationRecordPort, OnboardingCreator } from "@creatoros/workflows";
-import { evaluateActivationReadiness } from "@/lib/activation-readiness";
+import { COMPETITOR_RESEARCH_KEY, evaluateActivationReadiness } from "@/lib/activation-readiness";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 /**
@@ -121,12 +121,28 @@ export class SupabaseActivationRecordPort implements ActivationRecordPort {
     );
   }
 
+  /**
+   * Competitor research is work a person does, so activation commissions it
+   * rather than inventing it.
+   *
+   * This previously wrote a bare row into creator_competitors, which could never
+   * have succeeded: the table requires competitor_name and competitor_type, and
+   * the upsert supplied neither. Filling them in would have been worse than the
+   * failure — a competitor CreatorOS made up, presented as research.
+   */
   async createCompetitorResearch(creator: OnboardingCreator): Promise<void> {
     await this.#upsert(
-      "creator_competitors",
+      "tasks",
       {
         creator_id: creator.id,
-        idempotency_key: `activation:${creator.id}:competitor-research:v1`,
+        title: `Complete competitor research for ${creator.stageName}`,
+        department: "GROWTH",
+        status: "OPEN",
+        priority: "MEDIUM",
+        requested_by: this.actorUserId,
+        source_type: "CREATOR_ACTIVATION_V1",
+        idempotency_key: COMPETITOR_RESEARCH_KEY(creator.id),
+        updated_at: new Date().toISOString(),
       },
       "organization_id,idempotency_key",
     );

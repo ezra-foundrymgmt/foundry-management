@@ -34,6 +34,7 @@ const creatorRowSchema = z.object({
   id: z.string().uuid(),
   stage_name: z.string(),
   current_health_score: z.coerce.number().nullable(),
+  current_content_buffer_days: z.coerce.number().nullable(),
 });
 
 /**
@@ -76,7 +77,7 @@ export async function produceDailyCreatorReport(input: {
 
   const creatorResult = await client
     .from("creators")
-    .select("id,stage_name,current_health_score")
+    .select("id,stage_name,current_health_score,current_content_buffer_days")
     .eq("organization_id", input.organizationId)
     .eq("id", input.creatorId)
     .maybeSingle();
@@ -139,8 +140,8 @@ export async function produceDailyCreatorReport(input: {
     reportDate,
     current,
     baseline: baseline.data,
-    healthBand: healthBand(creator.data.current_health_score ?? 0),
-    contentBufferDays: 0,
+    healthBand: healthBand(creator.data.current_health_score),
+    contentBufferDays: creator.data.current_content_buffer_days,
   });
 
   const { data, error } = await client

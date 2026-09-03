@@ -4,6 +4,7 @@ import { PIPELINE_STAGES } from "@creatoros/domain";
 import type { AppSession } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { appendAudit } from "@/lib/audit";
+import { logEvent } from "@/lib/observability";
 
 export const prospectCreateSchema = z.object({
   preferredName: z.string().trim().min(1).max(120),
@@ -36,6 +37,10 @@ export const prospectActivitySchema = z.object({
   occurredAt: z.string().datetime().optional(),
 });
 
+/**
+ * A reason the caller is allowed to see. The routes return `message` verbatim,
+ * so nothing constructed from a driver error may be one.
+ */
 export class ProspectError extends Error {
   constructor(
     message: string,
@@ -43,6 +48,22 @@ export class ProspectError extends Error {
   ) {
     super(message);
   }
+}
+
+/**
+ * Adversarial review, confirmed: seven sites wrapped the Supabase driver's own
+ * message in ProspectError, and the routes return that verbatim. A body
+ * containing a NUL byte — which passes the zod check, because trim() does not
+ * strip it — made Postgres answer 22P05 and handed its text to the browser.
+ * Schema drift, a downgraded key, or a statement timeout would each do the same,
+ * naming internal tables, columns and constraints.
+ *
+ * The reason stays in the server log, where it is useful, and the caller gets a
+ * code that says what happened without describing how.
+ */
+function databaseFailure(operation: string, error: { message: string }): ProspectError {
+  logEvent("error", "prospect.database_failed", { operation, message: error.message });
+  return new ProspectError("PROSPECT_DATABASE_FAILED", 500);
 }
 
 function admin() {
@@ -80,7 +101,7 @@ export async function createProspect(
     .eq("organization_id", session.organizationId)
     .is("archived_at", null)
     .limit(500);
-  if (existing.error) throw new ProspectError(existing.error.message, 500);
+  if (existing.error) throw databaseFailure("duplicate-scan", existing.error);
 
   const duplicate = (existing.data ?? []).find((row) => {
     const candidate = row as { id: string; stage_name: string; email: string | null };
@@ -108,7 +129,7 @@ export async function createProspect(
     })
     .select("id,prospect_number,stage_name,pipeline_stage")
     .single();
-  if (error) throw new ProspectError(error.message, 500);
+  if (error) throw databaseFailure("write", error);
 
   const created = data as { id: string; prospect_number: string };
   await appendAudit(session, "prospect.created", "prospect", created.id, {
@@ -133,7 +154,7 @@ export async function updateProspect(
     .eq("organization_id", session.organizationId)
     .eq("id", prospectId)
     .maybeSingle();
-  if (current.error) throw new ProspectError(current.error.message, 500);
+  if (current.error) throw databaseFailure("read-current", current.error);
   if (!current.data) throw new ProspectError("PROSPECT_NOT_FOUND", 404);
   const before = current.data as { pipeline_stage: string; prospect_number: string };
 
@@ -158,7 +179,7 @@ export async function updateProspect(
     .eq("id", prospectId)
     .select("id,prospect_number,pipeline_stage,archived_at")
     .maybeSingle();
-  if (error) throw new ProspectError(error.message, 500);
+  if (error) throw databaseFailure("write", error);
   if (!data) throw new ProspectError("PROSPECT_NOT_FOUND", 404);
 
   // A stage change is the event operators reconstruct a pipeline from, so it is
@@ -190,7 +211,7 @@ export async function addProspectActivity(
     .eq("organization_id", session.organizationId)
     .eq("id", prospectId)
     .maybeSingle();
-  if (owner.error) throw new ProspectError(owner.error.message, 500);
+  if (owner.error) throw databaseFailure("read-owner", owner.error);
   if (!owner.data) throw new ProspectError("PROSPECT_NOT_FOUND", 404);
 
   const { data, error } = await client
@@ -205,7 +226,7 @@ export async function addProspectActivity(
     })
     .select("id,activity_type,occurred_at")
     .single();
-  if (error) throw new ProspectError(error.message, 500);
+  if (error) throw databaseFailure("write", error);
 
   await appendAudit(session, "prospect.activity_logged", "prospect", prospectId, {
     activityType: input.activityType,
@@ -222,6 +243,6 @@ export async function listProspectActivities(session: AppSession, prospectId: st
     .eq("prospect_id", prospectId)
     .order("occurred_at", { ascending: false })
     .limit(50);
-  if (error) throw new ProspectError(error.message, 500);
+  if (error) throw databaseFailure("write", error);
   return data ?? [];
 }

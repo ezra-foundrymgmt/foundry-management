@@ -152,6 +152,29 @@ export async function linkSlackIdentity(
     throw new Error("SLACK_USER_IN_DIFFERENT_WORKSPACE");
 
   const verifiedAt = new Date().toISOString();
+  // slack_user_identities carries two unique constraints — (slack_team_id,
+  // slack_user_id) and (organization_id, user_id) — and an upsert can only name
+  // one. Re-pointing a Slack account at a different CreatorOS user conflicted on
+  // the one the upsert did not name and failed outright, which is exactly what
+  // an admin does when someone changes role or leaves. Retiring any existing
+  // link for that Slack account first leaves a single constraint in play.
+  const released = await client
+    .from("slack_user_identities")
+    .update({ active: false, updated_at: verifiedAt })
+    .eq("organization_id", session.organizationId)
+    .eq("slack_team_id", slackUser.slackTeamId)
+    .eq("slack_user_id", slackUser.slackUserId)
+    .neq("user_id", input.userId)
+    .select("user_id");
+  if (released.error) throw new Error(`SLACK_IDENTITY_RELEASE_FAILED: ${released.error.message}`);
+  const previous = z.array(z.object({ user_id: z.string() })).safeParse(released.data ?? []);
+  if (previous.success)
+    for (const row of previous.data)
+      await appendAudit(session, "slack.identity.unlinked", "user", row.user_id, {
+        slackUserId: slackUser.slackUserId,
+        reason: "REPOINTED",
+      });
+
   const { error } = await client.from("slack_user_identities").upsert(
     {
       organization_id: session.organizationId,

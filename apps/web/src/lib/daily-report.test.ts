@@ -50,7 +50,12 @@ beforeEach(() => {
   tables.clear();
   writes.length = 0;
   tables.set("creators", {
-    data: { id: CREATOR, stage_name: "Madison Carter", current_health_score: 71 },
+    data: {
+      id: CREATOR,
+      stage_name: "Madison Carter",
+      current_health_score: 71,
+      current_content_buffer_days: 12,
+    },
     error: null,
   });
 });
@@ -138,5 +143,97 @@ describe("daily report production", () => {
     });
     // Data quality travels with the report so partial data is visible as such.
     expect(write?.payload["data_quality_json"]).toMatchObject({ revenueDays: 2, socialPosts: 1 });
+  });
+});
+
+/**
+ * Adversarial review, confirmed twice over. Nothing in the application writes
+ * creators.current_health_score, and the report hardcoded contentBufferDays to
+ * zero, so every report for every real creator was stored as health CRITICAL
+ * with a fabricated "content buffer is critical at 0 days" anomaly — and the
+ * operator could turn that anomaly into a real CRITICAL task with one click.
+ */
+describe("absent measurements", () => {
+  const baseline = { ...baselineMetrics };
+
+  function withMetrics() {
+    tables.set("creator_baselines", { data: { metrics_json: baseline }, error: null });
+    tables.set("creator_revenue_daily", {
+      data: [
+        {
+          date: "2026-09-01",
+          creator_platform_receipts: 900,
+          new_subscribers: 40,
+          first_buyers: 9,
+        },
+      ],
+      error: null,
+    });
+    tables.set("social_posts", {
+      data: [{ reach: 5000, profile_visits: 300, outbound_clicks: 90 }],
+      error: null,
+    });
+    tables.set("daily_creator_reports", {
+      data: { id: "66666666-6666-4666-8666-666666666666" },
+      error: null,
+    });
+  }
+
+  it("reports an unmeasured health score as UNKNOWN, not CRITICAL", async () => {
+    withMetrics();
+    tables.set("creators", {
+      data: {
+        id: CREATOR,
+        stage_name: "Madison Carter",
+        current_health_score: null,
+        current_content_buffer_days: 12,
+      },
+      error: null,
+    });
+
+    await produceDailyCreatorReport({ organizationId: ORG, creatorId: CREATOR });
+
+    const written = writes.find((entry) => entry.table === "daily_creator_reports");
+    expect(written?.payload["health_status"]).toBe("UNKNOWN");
+  });
+
+  it("raises no content-buffer anomaly when the buffer was never measured", async () => {
+    withMetrics();
+    tables.set("creators", {
+      data: {
+        id: CREATOR,
+        stage_name: "Madison Carter",
+        current_health_score: 71,
+        current_content_buffer_days: null,
+      },
+      error: null,
+    });
+
+    await produceDailyCreatorReport({ organizationId: ORG, creatorId: CREATOR });
+
+    const written = writes.find((entry) => entry.table === "daily_creator_reports");
+    const anomalies = JSON.stringify(written?.payload["anomalies_json"]);
+    expect(anomalies).not.toContain("Content buffer");
+    // priority is the operator's triage signal. If every report is CRITICAL, a
+    // genuine CRITICAL is indistinguishable from the noise floor.
+    expect(written?.payload["priority"]).not.toBe("CRITICAL");
+  });
+
+  it("still raises the anomaly when the buffer is genuinely low", async () => {
+    withMetrics();
+    tables.set("creators", {
+      data: {
+        id: CREATOR,
+        stage_name: "Madison Carter",
+        current_health_score: 71,
+        current_content_buffer_days: 2,
+      },
+      error: null,
+    });
+
+    await produceDailyCreatorReport({ organizationId: ORG, creatorId: CREATOR });
+
+    const written = writes.find((entry) => entry.table === "daily_creator_reports");
+    expect(JSON.stringify(written?.payload["anomalies_json"])).toContain("critical at 2 days");
   });
 });

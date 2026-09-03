@@ -7,7 +7,8 @@ export interface DiagnosticInput {
   current: MetricPoint;
   baseline: MetricPoint;
   healthBand: DailyReport["healthBand"];
-  contentBufferDays: number;
+  /** null when the buffer has never been measured. Not the same as zero days. */
+  contentBufferDays: number | null;
 }
 
 function percentChange(current: number, baseline: number): number | null {
@@ -78,7 +79,10 @@ export function generateDailyReport(input: DiagnosticInput): DailyReport {
     });
   }
 
-  if (input.contentBufferDays < 7) {
+  // An unmeasured buffer produces no anomaly. Reporting "critical at 0 days" for
+  // a creator nobody has measured invents the alarm and, because the operator can
+  // turn a recommendation into a real task, converts it into assigned work.
+  if (input.contentBufferDays !== null && input.contentBufferDays < 7) {
     anomalies.push({
       severity: "CRITICAL",
       message: `Content buffer is critical at ${input.contentBufferDays} days.`,

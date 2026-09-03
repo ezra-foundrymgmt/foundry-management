@@ -121,7 +121,13 @@ export async function resolveSlackWorkspace(slackTeamId: string): Promise<{
     .eq("provider", "SLACK")
     .eq("external_account_id", slackTeamId)
     .is("creator_id", null)
-    .eq("status", "CONNECTED")
+    // DEGRADED too: one failed health check during a Slack outage set that
+    // status, and requiring CONNECTED here made the ingress answer every
+    // subsequent event with 200 and no work. Slack does not retry a 200, so
+    // every mention and DM in that window was lost silently. The same rule the
+    // token reader uses (isTokenUsable) applies: DEGRADED is recoverable,
+    // revoked is not.
+    .in("status", ["CONNECTED", "DEGRADED"])
     .maybeSingle();
   const parsed = connectionSchema.safeParse(data);
   if (error || !parsed.success) return null;

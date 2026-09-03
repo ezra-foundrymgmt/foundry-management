@@ -19,7 +19,7 @@ const audits: Array<{ action: string; resourceId: string; metadata: Record<strin
 function makeQuery(table: string) {
   const chain: Record<string, unknown> = {};
   const result = () => Promise.resolve(tables.get(table) ?? { data: null, error: null });
-  for (const op of ["select", "eq", "is", "order", "limit"]) chain[op] = () => chain;
+  for (const op of ["select", "eq", "neq", "is", "order", "limit"]) chain[op] = () => chain;
   for (const op of ["upsert", "update", "insert"])
     chain[op] = (values: Record<string, unknown>) => {
       writes.push({ table, op, values });
@@ -103,7 +103,10 @@ describe("linking a Slack identity", () => {
 
     expect(lookupSlackUser).toHaveBeenCalledTimes(1);
     expect(identity).toMatchObject({ linked: true, slackUserId: "U0PAYTON" });
-    const write = writes.find((entry) => entry.table === "slack_user_identities");
+    // The upsert, not the release update that precedes it.
+    const write = writes.find(
+      (entry) => entry.table === "slack_user_identities" && entry.op === "upsert",
+    );
     expect(write?.values).toMatchObject({
       organization_id: ORG,
       user_id: USER,
@@ -216,6 +219,29 @@ describe("listing Slack identities", () => {
     // A revoked grant must not read as a live one.
     expect(rows).toEqual([
       expect.objectContaining({ userId: USER, linked: false, slackUserId: null }),
+    ]);
+  });
+});
+
+describe("re-pointing a Slack account", () => {
+  it("retires the previous link before writing the new one", async () => {
+    // Adversarial review, confirmed: this always failed. The table carries two
+    // unique constraints and an upsert can name only one, so re-pointing a Slack
+    // account at a different CreatorOS user — what an admin does when someone
+    // changes role or leaves — conflicted on the constraint the upsert did not
+    // name. The old link is retired first so only one constraint is in play.
+    const previousUser = "66666666-6666-4666-8666-666666666666";
+    tables.set("slack_user_identities", { data: [{ user_id: previousUser }], error: null });
+
+    await linkSlackIdentity(session, { userId: USER, slackUserId: "U0PAYTON" });
+
+    const identityWrites = writes.filter((entry) => entry.table === "slack_user_identities");
+    expect(identityWrites.map((entry) => entry.op)).toEqual(["update", "upsert"]);
+    expect(identityWrites[0]?.values).toMatchObject({ active: false });
+    // The person who lost the link is named in the trail, not only the one who gained it.
+    expect(audits.map((entry) => [entry.action, entry.resourceId])).toEqual([
+      ["slack.identity.unlinked", previousUser],
+      ["slack.identity.linked", USER],
     ]);
   });
 });

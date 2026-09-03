@@ -82,6 +82,19 @@ export async function runDueReportSchedules(options: { now?: Date; limit?: numbe
       cadence: schedule.cadence,
     };
     try {
+      // Adversarial review, confirmed: cadence was never branched on, so a
+      // WEEKLY schedule regenerated that day's daily report — upserted onto the
+      // same (creator_id, report_date) row — and reported PRODUCED. The weekly
+      // review nobody had written looked like it was running.
+      //
+      // There is no weekly producer yet. Saying so is the whole point: an
+      // operator can see WEEKLY_REVIEW_NOT_IMPLEMENTED on the schedule, which a
+      // silently duplicated daily report would never have told them.
+      if (schedule.cadence === "WEEKLY") {
+        outcomes.push({ ...base, status: "SKIPPED", reason: "WEEKLY_REVIEW_NOT_IMPLEMENTED" });
+        await recordResult(schedule.id, "SKIPPED", "WEEKLY_REVIEW_NOT_IMPLEMENTED");
+        continue;
+      }
       const result = await produceDailyCreatorReport({
         organizationId: schedule.organization_id,
         creatorId: schedule.creator_id,

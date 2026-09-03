@@ -11,7 +11,14 @@ export const DEFAULT_HEALTH_WEIGHTS: Record<keyof HealthComponents, number> = {
   complianceSecurity: 5,
 };
 
-export function healthBand(score: number): HealthBand {
+/**
+ * A score of 0 and no score at all are different facts. Coercing the second into
+ * the first reported every creator whose health had never been calculated as
+ * CRITICAL — and nothing in the application writes current_health_score yet, so
+ * that was every creator.
+ */
+export function healthBand(score: number | null | undefined): HealthBand {
+  if (score === null || score === undefined || !Number.isFinite(score)) return "UNKNOWN";
   return score >= 80 ? "GREEN" : score >= 65 ? "WATCH" : score >= 50 ? "AT_RISK" : "CRITICAL";
 }
 

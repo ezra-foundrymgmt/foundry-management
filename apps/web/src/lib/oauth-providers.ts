@@ -94,7 +94,12 @@ export async function checkSlackHealth(token: string) {
     ok: response.ok && data.ok === true,
     error:
       data.error === "invalid_auth" || data.error === "token_revoked" ? "AUTH_REVOKED" : data.error,
-    capabilities: { teamId: data.team_id ?? null, userId: data.user_id ?? null },
+    // auth.test's user_id IS the bot user id for a bot token. It has to be
+    // stored under the same key the ingress reads, because capabilities_json is
+    // replaced wholesale on every health check — writing "userId" here silently
+    // deleted botUserId and disabled the duplicate-delivery guard, so one DM
+    // mentioning the bot produced two agent turns and two Slack replies.
+    capabilities: { teamId: data.team_id ?? null, botUserId: data.user_id ?? null },
   };
 }
 

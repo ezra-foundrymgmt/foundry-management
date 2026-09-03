@@ -46,7 +46,7 @@ describe("CreatorOS database migration", () => {
     expect(creators.rows[0]?.count).toBe(3);
   });
 
-  it("enforces tenant isolation for authenticated reads", async () => {
+  it("gives a signed-in browser session no direct read access to tenant data", async () => {
     const userId = "40000000-0000-4000-8000-000000000001";
     await database.exec(`
       insert into auth.users(id) values ('${userId}');
@@ -59,10 +59,14 @@ describe("CreatorOS database migration", () => {
       set role authenticated;
     `);
     try {
-      const visible = await database.query<{ slug: string }>(
-        "select slug from public.organizations order by slug",
+      // Adversarial review, confirmed: this used to return the caller's own
+      // organization. RLS tenant-scoped the rows, but the role that decides
+      // whether they may see organizations at all was never consulted, so an
+      // editor refused /economics in the app could read creator_pnl_periods and
+      // audit_events straight from PostgREST with their own access token.
+      await expect(database.query("select slug from public.organizations")).rejects.toThrow(
+        /permission denied/,
       );
-      expect(visible.rows).toEqual([{ slug: "foundry" }]);
       await expect(
         database.exec(
           "insert into public.prospects(organization_id,preferred_name,stage_name) values ('00000000-0000-4000-8000-000000000001','Blocked','Blocked')",
@@ -73,13 +77,84 @@ describe("CreatorOS database migration", () => {
     }
   });
 
+  it("lets a signed-in user resolve their own membership and nobody else's", async () => {
+    // The single exception to the revoke: getSession() has to resolve the
+    // caller's role before any role check can happen. It is scoped to their own
+    // row, so it cannot be used to enumerate colleagues or learn who is an admin.
+    const userId = "40000000-0000-4000-8000-000000000001";
+    const otherUserId = "40000000-0000-4000-8000-000000000002";
+    await database.exec(`
+      insert into auth.users(id) values ('${otherUserId}');
+      insert into public.users(id,email) values ('${otherUserId}','other-member@fictional.demo');
+      insert into public.organization_memberships(organization_id,user_id,role)
+      values ('00000000-0000-4000-8000-000000000001','${otherUserId}','super_admin');
+      set request.jwt.claim.sub = '${userId}';
+      set role authenticated;
+    `);
+    try {
+      const rows = await database.query<{ user_id: string; role: string }>(
+        "select user_id, role from public.organization_memberships",
+      );
+      expect(rows.rows).toEqual([{ user_id: userId, role: "viewer" }]);
+    } finally {
+      await database.exec("reset role");
+    }
+  });
+
+  it("accepts the ON CONFLICT clause PostgREST emits for every activation upsert", async () => {
+    // Adversarial review, confirmed: no creator could ever have reached ACTIVE.
+    // PostgreSQL only infers a PARTIAL unique index for ON CONFLICT when the
+    // statement supplies a matching index predicate, and PostgREST's upsert does
+    // not, so three activation steps raised 42P10 on their very first insert —
+    // with no rows present — and Inngest burned its retries on every run.
+    //
+    // These are the exact statements `.upsert(..., { onConflict })` compiles to.
+    const org = "00000000-0000-4000-8000-000000000001";
+    const creator = await database.query<{ id: string }>(
+      `select id from public.creators where organization_id='${org}' limit 1`,
+    );
+    const creatorId = creator.rows[0]?.id;
+    expect(creatorId).toBeTruthy();
+
+    const upserts = [
+      `insert into public.tasks (organization_id, creator_id, title, department, status, priority, source_type, idempotency_key)
+         values ('${org}','${creatorId}','Complete competitor research','GROWTH','OPEN','MEDIUM','CREATOR_ACTIVATION_V1','activation:${creatorId}:competitor-research')
+         on conflict (organization_id, idempotency_key) do update set status = excluded.status`,
+      `insert into public.social_accounts (organization_id, creator_id, provider, connection_status, idempotency_key)
+         values ('${org}','${creatorId}','INSTAGRAM','NOT_CONFIGURED','activation:${creatorId}:social:INSTAGRAM')
+         on conflict (organization_id, idempotency_key) do update set connection_status = excluded.connection_status`,
+      `insert into public.integration_connections (organization_id, creator_id, provider, category, status, environment)
+         values ('${org}','${creatorId}','CREATOR_REVENUE','Revenue','NOT_CONFIGURED','live')
+         on conflict (organization_id, provider, creator_id) do update set status = excluded.status`,
+    ];
+
+    // Twice: the first proves the clause is accepted at all, the second proves a
+    // retried activation step recognises its own earlier work instead of
+    // inserting a duplicate.
+    for (const statement of upserts) {
+      await database.exec(statement);
+      await database.exec(statement);
+    }
+
+    for (const [table, predicate] of [
+      ["tasks", `idempotency_key = 'activation:${creatorId}:competitor-research'`],
+      ["social_accounts", `idempotency_key like 'activation:%'`],
+      ["integration_connections", `provider = 'CREATOR_REVENUE'`],
+    ] as const) {
+      const rows = await database.query<{ count: number }>(
+        `select count(*)::int as count from public.${table} where creator_id='${creatorId}' and ${predicate}`,
+      );
+      expect({ table, count: rows.rows[0]?.count }).toEqual({ table, count: 1 });
+    }
+  });
+
   it("installs an RLS policy on every tenant table", async () => {
     const result = await database.query<{ count: number }>(
       "select count(*)::int as count from pg_policies where schemaname='public'",
     );
     expect(result.rows[0]?.count).toBeGreaterThanOrEqual(50);
   });
-  it("blocks direct cross-organization records and credential-table reads", async () => {
+  it("blocks creator records and credential tables from a browser session entirely", async () => {
     const userId = "40000000-0000-4000-8000-000000000001";
     const otherOrg = "00000000-0000-4000-8000-000000000099";
     await database.exec(`
@@ -96,10 +171,11 @@ describe("CreatorOS database migration", () => {
       set role authenticated;
     `);
     try {
-      const visible = await database.query<{ count: number }>(
-        `select count(*)::int as count from public.creators where organization_id='${otherOrg}'`,
-      );
-      expect(visible.rows[0]?.count).toBe(0);
+      // Not merely scoped to the caller's tenant — unreadable. Creator records
+      // are served to the browser only after a server-side role check.
+      await expect(
+        database.query(`select count(*) from public.creators where organization_id='${otherOrg}'`),
+      ).rejects.toThrow(/permission denied/);
       await expect(
         database.query("select * from public.integration_credentials"),
       ).rejects.toThrow();

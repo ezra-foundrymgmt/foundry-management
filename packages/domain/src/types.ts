@@ -8,7 +8,11 @@ export const CREATOR_STATUSES = [
 ] as const;
 export type CreatorStatus = (typeof CREATOR_STATUSES)[number];
 
-export const HEALTH_BANDS = ["GREEN", "WATCH", "AT_RISK", "CRITICAL"] as const;
+// UNKNOWN is a band, not a missing value. A creator whose health has never been
+// calculated is not in crisis, and collapsing the absence into CRITICAL — the
+// most alarming band — is how an unmeasured creator ends up at the top of the
+// triage list.
+export const HEALTH_BANDS = ["GREEN", "WATCH", "AT_RISK", "CRITICAL", "UNKNOWN"] as const;
 export type HealthBand = (typeof HEALTH_BANDS)[number];
 
 export type TrendDirection = "up" | "down" | "flat";

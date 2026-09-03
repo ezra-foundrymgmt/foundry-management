@@ -85,7 +85,7 @@ const SATISFIED: ReadonlyArray<readonly [string, number]> = [
   ["creator_health_scores", 1],
   ["creator_pnl_periods", 1],
   ["content_inventory_snapshots", 1],
-  ["creator_competitors", 1],
+  [`tasks|idempotency_key=activation:${CREATOR}:competitor-research`, 1],
   ["content_pillars", 3],
   ["tasks|source_type=CREATOR_ACTIVATION_V1", 5],
   ["social_accounts", 3],
