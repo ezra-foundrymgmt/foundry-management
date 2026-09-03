@@ -116,8 +116,10 @@ user receives:
 
 > I can't answer that: your Slack account isn't linked to a CreatorOS user.
 
-That message reveals nothing about what exists. Mapping is a manual SQL insert
-today — see `docs/SLACK_SETUP.md` §6.
+That message reveals nothing about what exists. Linking is administered in
+Settings -> Integrations -> Slack identities by a user with `user.manage`; Slack
+is asked to confirm the account exists before the link is saved. See
+`docs/SLACK_SETUP.md` §6.
 
 ## Grounding rules
 

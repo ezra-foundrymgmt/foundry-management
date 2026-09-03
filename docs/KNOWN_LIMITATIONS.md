@@ -28,7 +28,7 @@ hosted PWA cannot be installed until a deployment exists.
 
 ### The migration chain has never been replayed — CREDENTIAL BLOCKED
 
-There are nine migrations. They have been reviewed statically but never
+There are eleven migrations. They have been reviewed statically but never
 executed in order against a real Postgres. No Docker and no `psql` are available
 on the build machine, and per instruction nothing destructive was run against
 the live Foundry project. **Fresh-replay success is unproven.**
@@ -52,7 +52,7 @@ tool query carries an `organization_id` filter equal to the caller's session org
 ### The Foundry agent has never spoken to Slack or Claude — CREDENTIAL BLOCKED
 
 Signature verification, event dedupe, the tool registry and the authorization
-gate are MACHINE VERIFIED by 37 tests. The end-to-end path — a real `@Foundry`
+gate are MACHINE VERIFIED by the agent test suite. The end-to-end path — a real `@Foundry`
 mention producing a real reply — has never run.
 
 ### Activation steps now do real work — MACHINE VERIFIED
@@ -115,15 +115,40 @@ It refuses when the creator is not in the organization, when no baseline has
 been frozen, or when no metrics exist — writing nothing and reporting the reason
 rather than producing a report whose comparisons would be invented.
 
-Nothing schedules it yet. `creator_report_schedules` rows are created during
-activation, but no cron or scheduled Inngest function reads them, so reports are
-only produced when the event is sent manually.
+### Report schedules now execute — MACHINE VERIFIED
 
-### Slack identity mapping is manual — PARTIAL
+`creator-report-scheduler` runs hourly, claims whichever schedules are due, and
+records the outcome. Claiming and advancing `next_due_at` happen in one SQL
+statement, so two overlapping runs cannot both take the same schedule. The
+advance steps forward from the schedule's own due time in whole cadence
+intervals, so a late run does not walk a 09:00 report later each day and an
+outage produces one catch-up report rather than a burst. Report dates are
+resolved in the schedule's timezone. A failure backs off to a bounded retry; a
+creator with no frozen baseline is recorded SKIPPED and waits for the next
+cadence rather than producing an invented report.
 
-`slack_user_identities` has no UI. Linking Ezra and Payton is a hand-written SQL
-insert (`docs/SLACK_SETUP.md` §6). An unmapped Slack user is refused, which is
-correct but means the agent does nothing until the inserts are done.
+Never executed against a real Postgres or a real Inngest deployment.
+
+### Slack identity mapping is administered in the app — MACHINE VERIFIED
+
+Settings → Integrations → Slack identities lists every active member with their
+link and allows a `user.manage` holder to link or unlink. Slack confirms the
+account exists in this workspace before the link is written, so a typo cannot
+create a live grant addressed to an id Slack could later assign to someone else;
+deactivated accounts, bots, accounts from another workspace and users outside the
+organization are all refused. Unlinking deactivates rather than deletes. Both
+directions append to the audit trail.
+
+Never exercised against a real Slack workspace: linking calls `users.info`.
+
+### The ACTIVE invariant is enforced — MACHINE VERIFIED
+
+`evaluateActivationReadiness` answers READY / WAITING / BLOCKED / INCOMPLETE from
+the records themselves — never workflow status, never a completion percentage —
+and `completeActivation` refuses to write ACTIVE unless the answer is READY.
+BLOCKED outranks INCOMPLETE outranks WAITING, so the reported reason is the one
+someone can act on. A count that cannot be read throws rather than reading as
+zero. The creator page shows the evaluation next to the status.
 
 ### Findings from adversarial review that are NOT fixed
 

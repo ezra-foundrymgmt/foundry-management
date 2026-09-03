@@ -121,22 +121,28 @@ Slack authenticates with a request signature rather than a session cookie.
 
 ## 6. Link Slack users to CreatorOS users
 
-**This step is mandatory and there is no UI for it yet.** A Slack user with no
-mapping gets a refusal, not an answer — Slack workspace membership is not
-CreatorOS authorization.
+**This step is mandatory.** A Slack user with no mapping gets a refusal, not an
+answer — Slack workspace membership is not CreatorOS authorization.
 
-For each Foundry employee, insert a row (service-role only):
+Settings -> Integrations -> **Slack identities** lists every active member with
+their link. Paste the person's Slack member id and press Link. It requires the
+`user.manage` permission, so `super_admin`.
 
-```sql
-insert into public.slack_user_identities
-  (organization_id, user_id, slack_team_id, slack_user_id)
-values
-  ('<foundry org uuid>', '<creatoros user uuid>', '<T...>', '<U...>');
-```
+The link is a grant of that CreatorOS user's role to whoever holds the Slack
+account, so it is checked before it is saved:
 
-- `slack_team_id` is the workspace id (`T…`), visible in the connection row.
-- `slack_user_id` is the member id (`U…`), from the Slack profile menu →
-  _Copy member ID_.
+- Slack must confirm the account exists in **this** workspace. A typo would
+  otherwise create a live grant addressed to an id Slack could later assign to
+  someone else.
+- Deactivated accounts and bots are refused.
+- The target must be an active member of the same organization.
+- Both linking and unlinking append to the audit trail, with who did it.
+
+Unlinking deactivates the row rather than deleting it, so the record that the
+grant existed survives. Access ends immediately.
+
+The member id (`U…` or `W…`) comes from the Slack profile menu → _Copy member
+ID_. The workspace id is resolved from the connection; you do not type it.
 
 The agent runs every tool as that CreatorOS user, with that user's role. Ezra and
 Payton need one row each; they must not share a mapping.
