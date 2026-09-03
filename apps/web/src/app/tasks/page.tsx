@@ -3,11 +3,12 @@ import { useEffect, useState } from "react";
 import { creators, tasks as seededTasks, type Task } from "@creatoros/domain";
 import { Filter, Plus } from "lucide-react";
 import { DemoStrip, PageHeader } from "@/components/page-header";
+import { useDemoMode } from "@/components/mode-provider";
 import { StatusBadge } from "@/components/status-badge";
 
 export default function TasksPage() {
   type DisplayTask = Task & { creatorName?: string; updatedAt?: string };
-  const demo = process.env["NEXT_PUBLIC_CREATOROS_DEMO_MODE"] !== "false";
+  const demo = useDemoMode();
   const [tasks, setTasks] = useState<DisplayTask[]>(demo ? seededTasks : []);
   const [message, setMessage] = useState("");
   useEffect(() => {

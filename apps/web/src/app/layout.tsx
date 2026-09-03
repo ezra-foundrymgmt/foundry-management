@@ -3,6 +3,8 @@ import { AppShell } from "@/components/app-shell";
 import type { AccountIdentity } from "@/components/account-menu";
 import { PwaRegistrar } from "@/components/pwa-registrar";
 import { getSession } from "@/lib/auth";
+import { isMockMode } from "@/lib/environment";
+import { DemoModeProvider } from "@/components/mode-provider";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -32,6 +34,9 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   // Resolved in the layout so every authenticated page renders the real signed-in
   // identity. This intentionally makes the shell dynamic: a per-tenant console
   // cannot be statically prerendered and still show whose session it is.
+  // Authoritative: comes from the environment contract, which refuses mock mode
+  // in any deployed environment.
+  const demo = isMockMode();
   const session = await getSession().catch(() => null);
   const identity: AccountIdentity | null = session
     ? {
@@ -46,7 +51,9 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
     <html lang="en">
       <body>
         <PwaRegistrar />
-        <AppShell identity={identity}>{children}</AppShell>
+        <DemoModeProvider demo={demo}>
+          <AppShell identity={identity}>{children}</AppShell>
+        </DemoModeProvider>
       </body>
     </html>
   );

@@ -363,3 +363,681 @@ export async function getLiveAuditEvents() {
     correlation: row.correlation_id.slice(0, 13),
   }));
 }
+
+/* ------------------------------------------------------------------------- *
+ * Readers for pages that previously rendered seed fixtures unconditionally.
+ *
+ * Each returns exactly what the database holds. Where a value is genuinely
+ * absent it stays null rather than becoming a zero, because on these pages a
+ * zero reads as a measured result.
+ * ------------------------------------------------------------------------- */
+
+async function resolveCreatorNames(
+  client: AdminClient,
+  organizationId: string,
+  creatorIds: string[],
+): Promise<Map<string, string>> {
+  const unique = [...new Set(creatorIds)];
+  if (unique.length === 0) return new Map();
+  const { data, error } = await client
+    .from("creators")
+    .select("id,stage_name")
+    .eq("organization_id", organizationId)
+    .in("id", unique);
+  if (error) throw new Error(`CREATOR_NAME_LOOKUP_FAILED: ${error.message}`);
+  return new Map(
+    z
+      .array(z.object({ id: z.string().uuid(), stage_name: z.string() }))
+      .parse(data ?? [])
+      .map((row) => [row.id, row.stage_name]),
+  );
+}
+
+export interface LivePnlRow {
+  creatorId: string;
+  creator: string;
+  periodStart: string;
+  periodEnd: string;
+  receipts: number | null;
+  commissionRate: number | null;
+  foundryRevenue: number | null;
+  directCosts: number | null;
+  contributionProfit: number | null;
+  contributionMargin: number | null;
+}
+
+const COST_FIELDS = [
+  "fan_ops_labor",
+  "creator_success_labor",
+  "editing_cost",
+  "growth_labor",
+  "creator_specific_software",
+  "promotion_cost",
+  "paid_traffic_cost",
+  "contractor_cost",
+  "other_direct_cost",
+] as const;
+
+export async function getLivePnlRows(): Promise<LivePnlRow[]> {
+  const { session, client } = await context();
+  const { data, error } = await client
+    .from("creator_pnl_periods")
+    .select(
+      "creator_id,period_start,period_end,creator_platform_receipts,commission_rate,foundry_revenue,fan_ops_labor,creator_success_labor,editing_cost,growth_labor,creator_specific_software,promotion_cost,paid_traffic_cost,contractor_cost,other_direct_cost,contribution_profit,contribution_margin",
+    )
+    .eq("organization_id", session.organizationId)
+    .order("period_start", { ascending: false })
+    .limit(50);
+  if (error) throw new Error(`PNL_READ_FAILED: ${error.message}`);
+  const numeric = z.coerce.number().nullable();
+  const rows = z
+    .array(
+      z.object({
+        creator_id: z.string().uuid(),
+        period_start: z.string(),
+        period_end: z.string(),
+        creator_platform_receipts: numeric,
+        commission_rate: numeric,
+        foundry_revenue: numeric,
+        fan_ops_labor: numeric,
+        creator_success_labor: numeric,
+        editing_cost: numeric,
+        growth_labor: numeric,
+        creator_specific_software: numeric,
+        promotion_cost: numeric,
+        paid_traffic_cost: numeric,
+        contractor_cost: numeric,
+        other_direct_cost: numeric,
+        contribution_profit: numeric,
+        contribution_margin: numeric,
+      }),
+    )
+    .parse(data ?? []);
+  if (rows.length === 0) return [];
+  const names = await resolveCreatorNames(
+    client,
+    session.organizationId,
+    rows.map((row) => row.creator_id),
+  );
+  return rows.map((row) => {
+    // Only sum costs that were actually recorded. If every component is null the
+    // total is unknown, not zero: a zero cost line reads as a measured result.
+    const recorded = COST_FIELDS.map((field) => row[field]).filter(
+      (value): value is number => value !== null,
+    );
+    return {
+      creatorId: row.creator_id,
+      creator: names.get(row.creator_id) ?? "Unknown creator",
+      periodStart: row.period_start,
+      periodEnd: row.period_end,
+      receipts: row.creator_platform_receipts,
+      commissionRate: row.commission_rate,
+      foundryRevenue: row.foundry_revenue,
+      directCosts: recorded.length ? recorded.reduce((sum, value) => sum + value, 0) : null,
+      contributionProfit: row.contribution_profit,
+      contributionMargin: row.contribution_margin,
+    };
+  });
+}
+
+export interface LiveTaskRow {
+  id: string;
+  title: string;
+  creatorName: string | null;
+  department: string | null;
+  priority: string | null;
+  status: string;
+  dueAt: string | null;
+  sourceType: string | null;
+}
+
+export async function getLiveTasks(): Promise<LiveTaskRow[]> {
+  const { session, client } = await context();
+  const { data, error } = await client
+    .from("tasks")
+    .select("id,title,creator_id,department,priority,status,due_at,source_type")
+    .eq("organization_id", session.organizationId)
+    .order("due_at", { ascending: true, nullsFirst: false })
+    .limit(200);
+  if (error) throw new Error(`TASKS_READ_FAILED: ${error.message}`);
+  const rows = z
+    .array(
+      z.object({
+        id: z.string().uuid(),
+        title: z.string(),
+        creator_id: z.string().uuid().nullable(),
+        department: z.string().nullable(),
+        priority: z.string().nullable(),
+        status: z.string(),
+        due_at: z.string().nullable(),
+        source_type: z.string().nullable(),
+      }),
+    )
+    .parse(data ?? []);
+  const names = await resolveCreatorNames(
+    client,
+    session.organizationId,
+    rows.map((row) => row.creator_id).filter((id): id is string => typeof id === "string"),
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    title: row.title,
+    creatorName: row.creator_id ? (names.get(row.creator_id) ?? null) : null,
+    department: row.department,
+    priority: row.priority,
+    status: row.status,
+    dueAt: row.due_at,
+    sourceType: row.source_type,
+  }));
+}
+
+export interface LiveReportRow {
+  id: string;
+  creatorId: string;
+  creatorName: string;
+  reportDate: string;
+  status: string;
+  healthStatus: string | null;
+  summary: string;
+  primaryBottleneck: string | null;
+  priority: string | null;
+  provider: string;
+}
+
+export async function getLiveReports(): Promise<LiveReportRow[]> {
+  const { session, client } = await context();
+  const { data, error } = await client
+    .from("daily_creator_reports")
+    .select(
+      "id,creator_id,report_date,status,health_status,summary,primary_bottleneck,priority,provider",
+    )
+    .eq("organization_id", session.organizationId)
+    .order("report_date", { ascending: false })
+    .limit(60);
+  if (error) throw new Error(`REPORTS_READ_FAILED: ${error.message}`);
+  const rows = z
+    .array(
+      z.object({
+        id: z.string().uuid(),
+        creator_id: z.string().uuid(),
+        report_date: z.string(),
+        status: z.string(),
+        health_status: z.string().nullable(),
+        summary: z.string(),
+        primary_bottleneck: z.string().nullable(),
+        priority: z.string().nullable(),
+        provider: z.string(),
+      }),
+    )
+    .parse(data ?? []);
+  const names = await resolveCreatorNames(
+    client,
+    session.organizationId,
+    rows.map((row) => row.creator_id),
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    creatorId: row.creator_id,
+    creatorName: names.get(row.creator_id) ?? "Unknown creator",
+    reportDate: row.report_date,
+    status: row.status,
+    healthStatus: row.health_status,
+    summary: row.summary,
+    primaryBottleneck: row.primary_bottleneck,
+    priority: row.priority,
+    provider: row.provider,
+  }));
+}
+
+export interface LiveIncidentRow {
+  id: string;
+  incidentNumber: string | null;
+  title: string;
+  type: string;
+  severity: string;
+  status: string;
+  creatorName: string | null;
+  detectedAt: string;
+  resolvedAt: string | null;
+}
+
+export async function getLiveIncidents(): Promise<LiveIncidentRow[]> {
+  const { session, client } = await context();
+  const { data, error } = await client
+    .from("incidents")
+    .select("id,incident_number,title,type,severity,status,creator_id,detected_at,resolved_at")
+    .eq("organization_id", session.organizationId)
+    .order("detected_at", { ascending: false })
+    .limit(100);
+  if (error) throw new Error(`INCIDENTS_READ_FAILED: ${error.message}`);
+  const rows = z
+    .array(
+      z.object({
+        id: z.string().uuid(),
+        incident_number: z.string().nullable(),
+        title: z.string(),
+        type: z.string(),
+        severity: z.string(),
+        status: z.string(),
+        creator_id: z.string().uuid().nullable(),
+        detected_at: z.string(),
+        resolved_at: z.string().nullable(),
+      }),
+    )
+    .parse(data ?? []);
+  const names = await resolveCreatorNames(
+    client,
+    session.organizationId,
+    rows.map((row) => row.creator_id).filter((id): id is string => typeof id === "string"),
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    incidentNumber: row.incident_number,
+    title: row.title,
+    type: row.type,
+    severity: row.severity,
+    status: row.status,
+    creatorName: row.creator_id ? (names.get(row.creator_id) ?? null) : null,
+    detectedAt: row.detected_at,
+    resolvedAt: row.resolved_at,
+  }));
+}
+
+export interface LiveExperimentRow {
+  id: string;
+  name: string;
+  creatorName: string;
+  status: string;
+  hypothesis: string;
+  primaryMetric: string;
+  result: string | null;
+  confidence: string;
+  startedAt: string | null;
+}
+
+export async function getLiveExperiments(): Promise<LiveExperimentRow[]> {
+  const { session, client } = await context();
+  const { data, error } = await client
+    .from("experiments")
+    .select("id,name,creator_id,status,hypothesis,primary_metric,result,confidence,started_at")
+    .eq("organization_id", session.organizationId)
+    .order("started_at", { ascending: false, nullsFirst: false })
+    .limit(100);
+  if (error) throw new Error(`EXPERIMENTS_READ_FAILED: ${error.message}`);
+  const rows = z
+    .array(
+      z.object({
+        id: z.string().uuid(),
+        name: z.string(),
+        creator_id: z.string().uuid(),
+        status: z.string(),
+        hypothesis: z.string(),
+        primary_metric: z.string(),
+        result: z.string().nullable(),
+        confidence: z.string(),
+        started_at: z.string().nullable(),
+      }),
+    )
+    .parse(data ?? []);
+  const names = await resolveCreatorNames(
+    client,
+    session.organizationId,
+    rows.map((row) => row.creator_id),
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    creatorName: names.get(row.creator_id) ?? "Unknown creator",
+    status: row.status,
+    hypothesis: row.hypothesis,
+    primaryMetric: row.primary_metric,
+    result: row.result,
+    confidence: row.confidence,
+    startedAt: row.started_at,
+  }));
+}
+
+export interface LiveContentRow {
+  id: string;
+  title: string | null;
+  creatorName: string;
+  assetType: string | null;
+  platform: string | null;
+  approvalStatus: string | null;
+  inventoryCategory: string | null;
+  usedCount: number;
+}
+
+export async function getLiveContentAssets(): Promise<LiveContentRow[]> {
+  const { session, client } = await context();
+  const { data, error } = await client
+    .from("content_assets")
+    .select("id,title,creator_id,asset_type,platform,approval_status,inventory_category,used_count")
+    .eq("organization_id", session.organizationId)
+    .limit(200);
+  if (error) throw new Error(`CONTENT_READ_FAILED: ${error.message}`);
+  const rows = z
+    .array(
+      z.object({
+        id: z.string().uuid(),
+        title: z.string().nullable(),
+        creator_id: z.string().uuid(),
+        asset_type: z.string().nullable(),
+        platform: z.string().nullable(),
+        approval_status: z.string().nullable(),
+        inventory_category: z.string().nullable(),
+        used_count: z.coerce.number(),
+      }),
+    )
+    .parse(data ?? []);
+  const names = await resolveCreatorNames(
+    client,
+    session.organizationId,
+    rows.map((row) => row.creator_id),
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    title: row.title,
+    creatorName: names.get(row.creator_id) ?? "Unknown creator",
+    assetType: row.asset_type,
+    platform: row.platform,
+    approvalStatus: row.approval_status,
+    inventoryCategory: row.inventory_category,
+    usedCount: row.used_count,
+  }));
+}
+
+export interface LiveApplicationRow {
+  id: string;
+  stageName: string;
+  preferredName: string;
+  email: string;
+  status: string | null;
+  submittedAt: string | null;
+}
+
+export async function getLiveApplications(): Promise<LiveApplicationRow[]> {
+  const { session, client } = await context();
+  const { data, error } = await client
+    .from("creator_applications")
+    .select("id,stage_name,preferred_name,email,review_status,created_at")
+    .eq("organization_id", session.organizationId)
+    .order("created_at", { ascending: false })
+    .limit(100);
+  if (error) throw new Error(`APPLICATIONS_READ_FAILED: ${error.message}`);
+  return z
+    .array(
+      z.object({
+        id: z.string().uuid(),
+        stage_name: z.string(),
+        preferred_name: z.string(),
+        email: z.string(),
+        review_status: z.string().nullable(),
+        created_at: z.string(),
+      }),
+    )
+    .parse(data ?? [])
+    .map((row) => ({
+      id: row.id,
+      stageName: row.stage_name,
+      preferredName: row.preferred_name,
+      email: row.email,
+      status: row.review_status,
+      submittedAt: row.created_at,
+    }));
+}
+
+export interface LiveCreatorDetail {
+  creator: LiveCreatorRow & {
+    contractStatus: string | null;
+    jurisdictionStatus: string | null;
+    adultConfirmationStatus: string | null;
+    startDate: string | null;
+    timezone: string | null;
+    primaryPlatform: string | null;
+  };
+  latestReport: LiveReportRow | null;
+  tasks: LiveTaskRow[];
+  /** Null when no Brand Dossier row exists — not an empty dossier. */
+  brandProfile: {
+    knownFor: string | null;
+    positioning: string | null;
+    niche: string | null;
+  } | null;
+  boundaries: Array<{ category: string; statement: string; itemType: string }>;
+  baselineFrozen: boolean;
+}
+
+/**
+ * Everything Creator 360 needs, read from the database.
+ *
+ * Absent records return null rather than an empty object, so the page can say
+ * "not recorded" instead of implying a dossier exists but is blank.
+ */
+export async function getLiveCreatorDetail(creatorId: string): Promise<LiveCreatorDetail | null> {
+  const { session, client } = await context();
+  const creatorResult = await client
+    .from("creators")
+    .select(
+      "id,creator_number,stage_name,status,current_health_score,current_health_status,current_content_buffer_days,assigned_creator_success_user_id,assigned_growth_user_id,contract_status,jurisdiction_review_status,adult_confirmation_status,start_date,timezone,primary_platform",
+    )
+    .eq("organization_id", session.organizationId)
+    .eq("id", creatorId)
+    .maybeSingle();
+  if (creatorResult.error) throw new Error(`CREATOR_READ_FAILED: ${creatorResult.error.message}`);
+  const parsed = z
+    .object({
+      id: z.string().uuid(),
+      creator_number: z.string(),
+      stage_name: z.string(),
+      status: z.string(),
+      current_health_score: z.coerce.number().nullable(),
+      current_health_status: z.string().nullable(),
+      current_content_buffer_days: z.coerce.number().nullable(),
+      assigned_creator_success_user_id: z.string().uuid().nullable(),
+      assigned_growth_user_id: z.string().uuid().nullable(),
+      contract_status: z.string().nullable(),
+      jurisdiction_review_status: z.string().nullable(),
+      adult_confirmation_status: z.string().nullable(),
+      start_date: z.string().nullable(),
+      timezone: z.string().nullable(),
+      primary_platform: z.string().nullable(),
+    })
+    .safeParse(creatorResult.data);
+  // A creator in another organization resolves to nothing, exactly like one that
+  // does not exist.
+  if (!parsed.success) return null;
+  const row = parsed.data;
+
+  const [
+    revenue,
+    connections,
+    owners,
+    reportResult,
+    taskResult,
+    brandResult,
+    boundaryResult,
+    baselineResult,
+  ] = await Promise.all([
+    client
+      .from("creator_revenue_daily")
+      .select("creator_id,date,creator_platform_receipts")
+      .eq("organization_id", session.organizationId)
+      .eq("creator_id", creatorId)
+      .gte("date", isoDaysAgo(60)),
+    client
+      .from("integration_connections")
+      .select("creator_id,provider,status,health")
+      .eq("organization_id", session.organizationId),
+    resolveUserLabels(
+      client,
+      [row.assigned_creator_success_user_id, row.assigned_growth_user_id].filter(
+        (id): id is string => typeof id === "string",
+      ),
+    ),
+    client
+      .from("daily_creator_reports")
+      .select(
+        "id,creator_id,report_date,status,health_status,summary,primary_bottleneck,priority,provider",
+      )
+      .eq("organization_id", session.organizationId)
+      .eq("creator_id", creatorId)
+      .order("report_date", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    client
+      .from("tasks")
+      .select("id,title,creator_id,department,priority,status,due_at,source_type")
+      .eq("organization_id", session.organizationId)
+      .eq("creator_id", creatorId)
+      .order("due_at", { ascending: true, nullsFirst: false })
+      .limit(50),
+    client
+      .from("creator_brand_profiles")
+      .select("known_for,positioning_statement,niche")
+      .eq("organization_id", session.organizationId)
+      .eq("creator_id", creatorId)
+      .maybeSingle(),
+    client
+      .from("creator_boundaries")
+      .select("category,statement,item_type")
+      .eq("organization_id", session.organizationId)
+      .eq("creator_id", creatorId)
+      .eq("active", true)
+      .limit(25),
+    client
+      .from("creator_baselines")
+      .select("id", { count: "exact", head: true })
+      .eq("organization_id", session.organizationId)
+      .eq("creator_id", creatorId),
+  ]);
+  if (revenue.error) throw new Error(`REVENUE_READ_FAILED: ${revenue.error.message}`);
+  if (taskResult.error) throw new Error(`TASKS_READ_FAILED: ${taskResult.error.message}`);
+
+  const cutoff = isoDaysAgo(30);
+  let current = 0;
+  let prior = 0;
+  let observed = false;
+  for (const entry of revenueRowsSchema.parse(revenue.data ?? [])) {
+    observed = true;
+    if (entry.date >= cutoff) current += entry.creator_platform_receipts ?? 0;
+    else prior += entry.creator_platform_receipts ?? 0;
+  }
+
+  const connectionRows = connectionRowsSchema.parse(connections.data ?? []);
+  const relevant = connectionRows.filter(
+    (entry) => entry.creator_id === creatorId || entry.creator_id === null,
+  );
+  const integrationHealth =
+    relevant.length === 0
+      ? "NOT_CONFIGURED"
+      : relevant.some((entry) => entry.status === "ERROR")
+        ? "ERROR"
+        : relevant.some((entry) => entry.status === "DEGRADED")
+          ? "DEGRADED"
+          : relevant.every((entry) => entry.status === "CONNECTED")
+            ? "CONNECTED"
+            : (relevant[0]?.status ?? "NOT_CONFIGURED");
+
+  const report = z
+    .object({
+      id: z.string().uuid(),
+      creator_id: z.string().uuid(),
+      report_date: z.string(),
+      status: z.string(),
+      health_status: z.string().nullable(),
+      summary: z.string(),
+      primary_bottleneck: z.string().nullable(),
+      priority: z.string().nullable(),
+      provider: z.string(),
+    })
+    .safeParse(reportResult.data);
+
+  const brand = z
+    .object({
+      known_for: z.string().nullable(),
+      positioning_statement: z.string().nullable(),
+      niche: z.string().nullable(),
+    })
+    .safeParse(brandResult.data);
+
+  return {
+    creator: {
+      id: row.id,
+      creatorNumber: row.creator_number,
+      stageName: row.stage_name,
+      status: row.status,
+      monthlyRevenue: observed ? Math.round(current) : null,
+      revenueTrendPercent:
+        observed && prior > 0 ? Math.round(((current - prior) / prior) * 100) : null,
+      healthScore: row.current_health_score,
+      healthBand: row.current_health_status ?? "UNKNOWN",
+      contentBufferDays: row.current_content_buffer_days,
+      owner:
+        owners.get(row.assigned_creator_success_user_id ?? "") ??
+        owners.get(row.assigned_growth_user_id ?? "") ??
+        null,
+      integrationHealth,
+      contractStatus: row.contract_status,
+      jurisdictionStatus: row.jurisdiction_review_status,
+      adultConfirmationStatus: row.adult_confirmation_status,
+      startDate: row.start_date,
+      timezone: row.timezone,
+      primaryPlatform: row.primary_platform,
+    },
+    latestReport: report.success
+      ? {
+          id: report.data.id,
+          creatorId: report.data.creator_id,
+          creatorName: row.stage_name,
+          reportDate: report.data.report_date,
+          status: report.data.status,
+          healthStatus: report.data.health_status,
+          summary: report.data.summary,
+          primaryBottleneck: report.data.primary_bottleneck,
+          priority: report.data.priority,
+          provider: report.data.provider,
+        }
+      : null,
+    tasks: z
+      .array(
+        z.object({
+          id: z.string().uuid(),
+          title: z.string(),
+          creator_id: z.string().uuid().nullable(),
+          department: z.string().nullable(),
+          priority: z.string().nullable(),
+          status: z.string(),
+          due_at: z.string().nullable(),
+          source_type: z.string().nullable(),
+        }),
+      )
+      .parse(taskResult.data ?? [])
+      .map((task) => ({
+        id: task.id,
+        title: task.title,
+        creatorName: row.stage_name,
+        department: task.department,
+        priority: task.priority,
+        status: task.status,
+        dueAt: task.due_at,
+        sourceType: task.source_type,
+      })),
+    brandProfile: brand.success
+      ? {
+          knownFor: brand.data.known_for,
+          positioning: brand.data.positioning_statement,
+          niche: brand.data.niche,
+        }
+      : null,
+    boundaries: z
+      .array(z.object({ category: z.string(), statement: z.string(), item_type: z.string() }))
+      .parse(boundaryResult.data ?? [])
+      .map((entry) => ({
+        category: entry.category,
+        statement: entry.statement,
+        itemType: entry.item_type,
+      })),
+    baselineFrozen: (baselineResult.count ?? 0) > 0,
+  };
+}

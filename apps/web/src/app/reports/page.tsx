@@ -4,9 +4,10 @@ import { creators, reports, type DailyReport } from "@creatoros/domain";
 import { Check, ListChecks } from "lucide-react";
 import { z } from "zod";
 import { DemoStrip, PageHeader } from "@/components/page-header";
+import { useDemoMode } from "@/components/mode-provider";
 import { StatusBadge } from "@/components/status-badge";
 export default function ReportsPage() {
-  const demo = process.env["NEXT_PUBLIC_CREATOROS_DEMO_MODE"] !== "false";
+  const demo = useDemoMode();
   const [reportRecords, setReportRecords] = useState<Array<DailyReport & { creatorName: string }>>(
     demo
       ? reports.map((report) => ({

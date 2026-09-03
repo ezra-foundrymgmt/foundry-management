@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { creators, prospects, tasks } from "@creatoros/domain";
 import { AccountMenu, type AccountIdentity } from "./account-menu";
+import { useDemoMode } from "./mode-provider";
 import { WebMcpTools } from "./webmcp-tools";
 
 const nav = [
@@ -72,7 +73,7 @@ export function AppShell({
   const [query, setQuery] = useState("");
   const [liveResults, setLiveResults] = useState<typeof demoSearchable>([]);
   const inputRef = useRef<HTMLInputElement>(null);
-  const demo = process.env["NEXT_PUBLIC_CREATOROS_DEMO_MODE"] !== "false";
+  const demo = useDemoMode();
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {

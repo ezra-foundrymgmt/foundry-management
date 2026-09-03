@@ -1,38 +1,63 @@
-import { Plus, ShieldCheck } from "lucide-react";
+import { ShieldCheck } from "lucide-react";
+import { AccessDenied } from "@/components/access-denied";
 import { DemoStrip, PageHeader } from "@/components/page-header";
+import { LiveEmpty } from "@/components/live-empty";
 import { StatusBadge } from "@/components/status-badge";
-const incidents = [
+import { isMockMode } from "@/lib/environment";
+import { getLiveIncidents, type LiveIncidentRow } from "@/lib/live-data";
+import { authorizePage } from "@/lib/page-access";
+
+/** Demo rows, shaped as live rows so there is one render path. */
+const DEMO_INCIDENTS: LiveIncidentRow[] = [
   {
-    id: "INC-0008",
+    id: "demo-inc-0008",
+    incidentNumber: "INC-0008",
     title: "Instagram data sync degraded",
-    creator: "Sarah Vale",
     type: "INTEGRATION",
     severity: "MEDIUM",
-    owner: "Owen Reed",
-    detected: "Sep 2 · 6:04 AM",
     status: "OPEN",
+    creatorName: "Sarah Vale",
+    detectedAt: "2026-09-02T06:04:00.000Z",
+    resolvedAt: null,
   },
 ];
-export default function IncidentsPage() {
+
+export default async function IncidentsPage() {
+  const access = await authorizePage("creator.read");
+  if (!access.allowed)
+    return <AccessDenied title="Incidents" permission="creator.read" reason={access.reason} />;
+
+  const mock = isMockMode();
+  const incidents = mock ? DEMO_INCIDENTS : await getLiveIncidents();
+  const open = incidents.filter((incident) => incident.status !== "RESOLVED");
+
   return (
     <main className="page">
       <DemoStrip />
       <PageHeader
         eyebrow="Risk & response"
         title="Incidents"
-        subtitle="Operational, platform, data, relationship, security, and compliance issues with explicit ownership."
+        subtitle="Security, compliance, and integration failures that need a human owner and a resolution."
         actions={
-          <button
-            className="button primary"
-            disabled
-            title="Incident persistence requires the live database"
-          >
-            <Plus size={14} /> Log incident
-          </button>
+          <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>
+            {open.length} open of {incidents.length}
+          </span>
         }
       />
-      <section className="card">
-        {incidents.length ? (
+
+      {incidents.length === 0 ? (
+        <LiveEmpty
+          title="No incidents recorded"
+          hint="Integration failures and compliance flags appear here as they are raised."
+        />
+      ) : (
+        <section className="card">
+          <div className="section-head">
+            <h2>
+              <ShieldCheck size={16} /> Incident register
+            </h2>
+            <span className="subtitle">{open.length} awaiting resolution</span>
+          </div>
           <div className="table-wrap">
             <table className="data-table">
               <thead>
@@ -41,41 +66,36 @@ export default function IncidentsPage() {
                   <th>Creator</th>
                   <th>Type</th>
                   <th>Severity</th>
-                  <th>Owner</th>
                   <th>Detected</th>
                   <th>Status</th>
                 </tr>
               </thead>
               <tbody>
-                {incidents.map((item) => (
-                  <tr key={item.id}>
+                {incidents.map((incident) => (
+                  <tr key={incident.id}>
                     <td>
-                      <strong>{item.title}</strong>
+                      <strong>{incident.title}</strong>
                       <br />
-                      <span style={{ fontSize: 10, color: "var(--ink-soft)" }}>{item.id}</span>
+                      <span style={{ fontSize: 10, color: "var(--ink-soft)" }}>
+                        {incident.incidentNumber ?? incident.id.slice(0, 8)}
+                      </span>
                     </td>
-                    <td>{item.creator}</td>
-                    <td>{item.type}</td>
+                    <td>{incident.creatorName ?? "Portfolio-wide"}</td>
+                    <td>{incident.type}</td>
                     <td>
-                      <StatusBadge value={item.severity} />
+                      <StatusBadge value={incident.severity} />
                     </td>
-                    <td>{item.owner}</td>
-                    <td>{item.detected}</td>
+                    <td>{new Date(incident.detectedAt).toLocaleString()}</td>
                     <td>
-                      <StatusBadge value={item.status} />
+                      <StatusBadge value={incident.status} />
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        ) : (
-          <div className="empty-state">
-            <ShieldCheck size={28} />
-            <strong>No open incidents</strong>Portfolio risk is clear.
-          </div>
-        )}
-      </section>
+        </section>
+      )}
     </main>
   );
 }

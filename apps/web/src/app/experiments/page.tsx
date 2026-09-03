@@ -1,84 +1,111 @@
-import { Plus } from "lucide-react";
+import { AccessDenied } from "@/components/access-denied";
 import { DemoStrip, PageHeader } from "@/components/page-header";
+import { LiveEmpty } from "@/components/live-empty";
 import { StatusBadge } from "@/components/status-badge";
-const experiments = [
+import { isMockMode } from "@/lib/environment";
+import { getLiveExperiments, type LiveExperimentRow } from "@/lib/live-data";
+import { authorizePage } from "@/lib/page-access";
+
+/** Demo rows, shaped as live rows so there is one render path. */
+const DEMO_EXPERIMENTS: LiveExperimentRow[] = [
   {
+    id: "demo-exp-1",
     name: "Relationship POV hook order",
-    creator: "Madison Carter",
-    metric: "Profile visits",
+    creatorName: "Madison Carter",
     status: "ACTIVE",
-    decision: "—",
+    hypothesis: "Leading with the POV beat lifts profile visits against this creator's baseline.",
+    primaryMetric: "Profile visits",
+    result: null,
     confidence: "MEASURED",
+    startedAt: "2026-08-20T00:00:00.000Z",
   },
   {
+    id: "demo-exp-2",
     name: "Morning routine pacing",
-    creator: "Ava Monroe",
-    metric: "Shares / reach",
+    creatorName: "Ava Monroe",
     status: "COMPLETED",
-    decision: "SCALE",
+    hypothesis: "A faster first five seconds increases shares per reach.",
+    primaryMetric: "Shares / reach",
+    result: "SCALE",
     confidence: "MEASURED",
-  },
-  {
-    name: "Gym mirror refresh",
-    creator: "Madison Carter",
-    metric: "Reach",
-    status: "COMPLETED",
-    decision: "RETIRE",
-    confidence: "PARTIALLY_MEASURED",
+    startedAt: "2026-08-05T00:00:00.000Z",
   },
 ];
-export default function ExperimentsPage() {
+
+export default async function ExperimentsPage() {
+  const access = await authorizePage("analytics.read");
+  if (!access.allowed)
+    return <AccessDenied title="Experiments" permission="analytics.read" reason={access.reason} />;
+
+  const mock = isMockMode();
+  const experiments = mock ? DEMO_EXPERIMENTS : await getLiveExperiments();
+  const active = experiments.filter((experiment) => experiment.status === "ACTIVE");
+
   return (
     <main className="page">
       <DemoStrip />
       <PageHeader
-        eyebrow="Research → measure → scale"
-        title="Experiment registry"
-        subtitle="Every creative or funnel test has a hypothesis, metric, result, confidence level, and decision."
+        eyebrow="Creative intelligence"
+        title="Experiments"
+        subtitle="One hypothesis at a time, measured against the creator's own baseline rather than the roster."
         actions={
-          <button
-            className="button primary"
-            disabled
-            title="Experiment persistence requires the live database"
-          >
-            <Plus size={14} /> Create experiment
-          </button>
+          <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>
+            {active.length} active of {experiments.length}
+          </span>
         }
       />
-      <section className="card">
-        <div className="table-wrap">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Experiment</th>
-                <th>Creator</th>
-                <th>Primary metric</th>
-                <th>Status</th>
-                <th>Decision</th>
-                <th>Confidence</th>
-              </tr>
-            </thead>
-            <tbody>
-              {experiments.map((item) => (
-                <tr key={item.name}>
-                  <td>
-                    <strong>{item.name}</strong>
-                  </td>
-                  <td>{item.creator}</td>
-                  <td>{item.metric}</td>
-                  <td>
-                    <StatusBadge value={item.status} />
-                  </td>
-                  <td>
-                    <StatusBadge value={item.decision} />
-                  </td>
-                  <td>{item.confidence.replaceAll("_", " ")}</td>
+
+      {experiments.length === 0 ? (
+        <LiveEmpty
+          title="No experiments recorded"
+          hint="Experiments appear here once a hypothesis is registered against a creator."
+        />
+      ) : (
+        <section className="card">
+          <div className="section-head">
+            <h2>Experiment register</h2>
+            <span className="subtitle">{active.length} running</span>
+          </div>
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Experiment</th>
+                  <th>Creator</th>
+                  <th>Primary metric</th>
+                  <th>Status</th>
+                  <th>Result</th>
+                  <th>Confidence</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+              </thead>
+              <tbody>
+                {experiments.map((experiment) => (
+                  <tr key={experiment.id}>
+                    <td>
+                      <strong>{experiment.name}</strong>
+                      <br />
+                      <span style={{ fontSize: 10, color: "var(--ink-soft)" }}>
+                        {experiment.hypothesis}
+                      </span>
+                    </td>
+                    <td>{experiment.creatorName}</td>
+                    <td>{experiment.primaryMetric}</td>
+                    <td>
+                      <StatusBadge value={experiment.status} />
+                    </td>
+                    {/* An experiment with no recorded decision is undecided, not a
+                        negative result. */}
+                    <td>{experiment.result ?? "Undecided"}</td>
+                    <td>
+                      <StatusBadge value={experiment.confidence} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
     </main>
   );
 }

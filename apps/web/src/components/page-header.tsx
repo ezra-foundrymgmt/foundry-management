@@ -1,3 +1,6 @@
+"use client";
+
+import { useDemoMode } from "./mode-provider";
 export function PageHeader({
   eyebrow,
   title,
@@ -22,7 +25,10 @@ export function PageHeader({
 }
 
 export function DemoStrip() {
-  const demo = process.env["NEXT_PUBLIC_CREATOROS_DEMO_MODE"] !== "false";
+  // From the server contract. Reading a client env var here meant a live
+  // deployment could render the reassuring "DEMO MODE · Safe to explore" banner
+  // while showing real Foundry data, or the reverse.
+  const demo = useDemoMode();
   return (
     <div className={`demo-strip ${demo ? "" : "live-strip"}`}>
       <span>
