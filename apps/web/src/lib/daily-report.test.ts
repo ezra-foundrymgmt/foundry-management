@@ -92,6 +92,11 @@ describe("daily report production", () => {
     tables.set("creator_baselines", { data: { metrics_json: baselineMetrics }, error: null });
     tables.set("creator_revenue_daily", { data: [], error: null });
     tables.set("social_posts", { data: [], error: null });
+    // The producer reads back the id it upserted.
+    tables.set("daily_creator_reports", {
+      data: { id: "55555555-5555-4555-8555-555555555555" },
+      error: null,
+    });
     expect(await produceDailyCreatorReport({ organizationId: ORG, creatorId: CREATOR })).toEqual({
       produced: false,
       reason: "NO_METRICS_FOR_PERIOD",
@@ -235,5 +240,91 @@ describe("absent measurements", () => {
 
     const written = writes.find((entry) => entry.table === "daily_creator_reports");
     expect(JSON.stringify(written?.payload["anomalies_json"])).toContain("critical at 2 days");
+  });
+});
+
+describe("baseline window normalisation", () => {
+  /**
+   * Regression from the first real report produced in staging: a creator whose
+   * daily numbers had not moved was reported at -73% revenue and -73%
+   * acquisition, because a 7-day current sum was compared against a 31-day
+   * baseline sum. The baseline's own period_start/period_end existed from the
+   * first migration and were never read.
+   */
+  it("reports no material change for a creator performing exactly at baseline", async () => {
+    // 31-day baseline; the creator sustains the same daily rate through the
+    // 7-day current window.
+    const perDay = { revenue: 200, newSubscribers: 4, firstBuyers: 1 };
+    tables.set("creator_baselines", {
+      data: {
+        metrics_json: {
+          date: "2026-08-24",
+          reach: 0,
+          profileVisits: 0,
+          outboundClicks: 0,
+          newSubscribers: perDay.newSubscribers * 31,
+          firstBuyers: perDay.firstBuyers * 31,
+          revenue: perDay.revenue * 31,
+        },
+        period_start: "2026-07-25",
+        period_end: "2026-08-24",
+      },
+      error: null,
+    });
+    tables.set("creator_revenue_daily", {
+      data: Array.from({ length: 7 }, (_, i) => ({
+        date: `2026-08-2${i + 1}`,
+        creator_platform_receipts: perDay.revenue,
+        new_subscribers: perDay.newSubscribers,
+        first_buyers: perDay.firstBuyers,
+      })),
+      error: null,
+    });
+    tables.set("social_posts", { data: [], error: null });
+    // The producer reads back the id it upserted.
+    tables.set("daily_creator_reports", {
+      data: { id: "55555555-5555-4555-8555-555555555555" },
+      error: null,
+    });
+
+    const result = await produceDailyCreatorReport({ organizationId: ORG, creatorId: CREATOR });
+    expect(result.produced).toBe(true);
+
+    const write = writes.find((entry) => entry.table === "daily_creator_reports");
+    const quality = write?.payload["data_quality_json"] as {
+      comparisons: Record<string, number | null>;
+      baselineWindowDays: number | null;
+      baselineScaledToWindow: boolean;
+    };
+
+    expect(quality.baselineWindowDays).toBe(31);
+    expect(quality.baselineScaledToWindow).toBe(true);
+    // Flat performance reads as flat, not as a collapse.
+    expect(Math.abs(quality.comparisons["revenue"] ?? 999)).toBeLessThan(1);
+    expect(Math.abs(quality.comparisons["acquisition"] ?? 999)).toBeLessThan(1);
+  });
+
+  it("still compares, and says it did not scale, when the baseline period is unreadable", async () => {
+    tables.set("creator_baselines", {
+      data: { metrics_json: baselineMetrics, period_start: null, period_end: null },
+      error: null,
+    });
+    tables.set("creator_revenue_daily", {
+      data: [{ date: "2026-08-21", creator_platform_receipts: 100, new_subscribers: 2, first_buyers: 1 }],
+      error: null,
+    });
+    tables.set("social_posts", { data: [], error: null });
+    // The producer reads back the id it upserted.
+    tables.set("daily_creator_reports", {
+      data: { id: "55555555-5555-4555-8555-555555555555" },
+      error: null,
+    });
+
+    const result = await produceDailyCreatorReport({ organizationId: ORG, creatorId: CREATOR });
+    expect(result.produced).toBe(true);
+    const write = writes.find((entry) => entry.table === "daily_creator_reports");
+    const quality = write?.payload["data_quality_json"] as { baselineScaledToWindow: boolean };
+    // Not silently treated as a same-length window.
+    expect(quality.baselineScaledToWindow).toBe(false);
   });
 });

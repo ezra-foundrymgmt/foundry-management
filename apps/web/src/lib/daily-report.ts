@@ -59,6 +59,42 @@ function isoDaysAgo(days: number): string {
   return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
 }
 
+/** The trailing window `current` is summed over. */
+const CURRENT_WINDOW_DAYS = 7;
+
+/**
+ * Inclusive day count of a frozen baseline's period.
+ *
+ * Returns null when the period cannot be read, which makes the caller fall
+ * back to comparing unscaled — wrong, but no more wrong than before, and
+ * recorded in the report's data quality rather than hidden.
+ */
+function periodLengthInDays(start?: string | null, end?: string | null): number | null {
+  if (!start || !end) return null;
+  const from = Date.parse(start);
+  const to = Date.parse(end);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return null;
+  return Math.round((to - from) / 86_400_000) + 1;
+}
+
+/**
+ * Scales a summed MetricPoint by a window ratio.
+ *
+ * `date` is carried through untouched: it labels the point, it is not a
+ * quantity.
+ */
+function scaleMetricPoint(point: MetricPoint, factor: number): MetricPoint {
+  return {
+    date: point.date,
+    reach: point.reach * factor,
+    profileVisits: point.profileVisits * factor,
+    outboundClicks: point.outboundClicks * factor,
+    newSubscribers: point.newSubscribers * factor,
+    firstBuyers: point.firstBuyers * factor,
+    revenue: point.revenue * factor,
+  };
+}
+
 /**
  * Produces one creator's daily report from real CreatorOS data and stores it.
  *
@@ -87,7 +123,7 @@ export async function produceDailyCreatorReport(input: {
 
   const baselineResult = await client
     .from("creator_baselines")
-    .select("metrics_json")
+    .select("metrics_json,period_start,period_end")
     .eq("organization_id", input.organizationId)
     .eq("creator_id", input.creatorId)
     .order("version", { ascending: false })
@@ -95,9 +131,12 @@ export async function produceDailyCreatorReport(input: {
     .maybeSingle();
   if (baselineResult.error)
     throw new Error(`BASELINE_READ_FAILED: ${baselineResult.error.message}`);
-  const baseline = metricPointSchema.safeParse(
-    (baselineResult.data as { metrics_json?: unknown } | null)?.metrics_json,
-  );
+  const baselineRow = baselineResult.data as {
+    metrics_json?: unknown;
+    period_start?: string | null;
+    period_end?: string | null;
+  } | null;
+  const baseline = metricPointSchema.safeParse(baselineRow?.metrics_json);
   // Refusing here is the whole point: the rules engine reports change against a
   // baseline, and without one there is nothing to compare to.
   if (!baseline.success) return { produced: false, reason: "NO_BASELINE_FROZEN" };
@@ -135,11 +174,30 @@ export async function produceDailyCreatorReport(input: {
     revenue: revenueRows.reduce((total, row) => total + (row.creator_platform_receipts ?? 0), 0),
   };
 
+  /**
+   * Put both sides of the comparison on the same window before comparing.
+   *
+   * `current` is a 7-day sum. The baseline is a sum over whatever period was
+   * frozen -- 30 days is the intended default. Comparing them directly made a
+   * creator performing exactly at baseline look like a 77% collapse, which is
+   * what the first real report produced: -73% revenue and -73% acquisition for
+   * a creator whose daily numbers had not moved. The baseline's own
+   * period_start/period_end were stored from the first migration and never
+   * read.
+   *
+   * Scaling the baseline to the current window (rather than converting both to
+   * per-day rates) keeps the rules engine's absolute thresholds -- 20 new
+   * subscribers, 1000 reach -- meaningful against the window actually measured.
+   */
+  const baselineDays = periodLengthInDays(baselineRow?.period_start, baselineRow?.period_end);
+  const comparable =
+    baselineDays === null ? baseline.data : scaleMetricPoint(baseline.data, CURRENT_WINDOW_DAYS / baselineDays);
+
   const report = generateDailyReport({
     creatorId: input.creatorId,
     reportDate,
     current,
-    baseline: baseline.data,
+    baseline: comparable,
     healthBand: healthBand(creator.data.current_health_score),
     contentBufferDays: creator.data.current_content_buffer_days,
   });
@@ -166,6 +224,11 @@ export async function produceDailyCreatorReport(input: {
           revenueDays: revenueRows.length,
           socialPosts: socialRows.length,
           comparisons: report.comparisons,
+          // What the percentages were actually computed against, so a report
+          // can explain its own comparison after the fact.
+          currentWindowDays: CURRENT_WINDOW_DAYS,
+          baselineWindowDays: baselineDays,
+          baselineScaledToWindow: baselineDays !== null,
         },
         provider: "RULES",
       },
