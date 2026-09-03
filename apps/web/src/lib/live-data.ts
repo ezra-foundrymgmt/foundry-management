@@ -826,7 +826,11 @@ export interface LiveCreatorDetail {
     positioning: string | null;
     niche: string | null;
   } | null;
-  boundaries: Array<{ category: string; statement: string; itemType: string }>;
+  // Shaped from creator_boundaries' own columns. This used to claim
+  // creator_truth_items' shape (category/statement/item_type) while querying
+  // creator_boundaries, so PostgREST answered 42703 "column does not exist"
+  // on every live creator.
+  boundaries: Array<{ boundaryType: string; description: string; severity: string }>;
   baselineFrozen: boolean;
 }
 
@@ -924,7 +928,7 @@ export async function getLiveCreatorDetail(creatorId: string): Promise<LiveCreat
       .maybeSingle(),
     client
       .from("creator_boundaries")
-      .select("category,statement,item_type")
+      .select("boundary_type,description,severity")
       .eq("organization_id", session.organizationId)
       .eq("creator_id", creatorId)
       .eq("active", true)
@@ -1070,12 +1074,18 @@ export async function getLiveCreatorDetail(creatorId: string): Promise<LiveCreat
         }
       : null,
     boundaries: z
-      .array(z.object({ category: z.string(), statement: z.string(), item_type: z.string() }))
+      .array(
+        z.object({
+          boundary_type: z.string(),
+          description: z.string(),
+          severity: z.string(),
+        }),
+      )
       .parse(boundaryResult.data ?? [])
       .map((entry) => ({
-        category: entry.category,
-        statement: entry.statement,
-        itemType: entry.item_type,
+        boundaryType: entry.boundary_type,
+        description: entry.description,
+        severity: entry.severity,
       })),
     baselineFrozen: (baselineResult.count ?? 0) > 0,
   };

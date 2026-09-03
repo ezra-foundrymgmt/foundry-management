@@ -82,7 +82,11 @@ function demoDetail(creatorId: string): LiveCreatorDetail | null {
       niche: "Fitness & lifestyle",
     },
     boundaries: [
-      { category: "Content", statement: "No face-visible gym content", itemType: "prohibited" },
+      {
+        boundaryType: "CONTENT",
+        description: "No face-visible gym content",
+        severity: "PROHIBITED",
+      },
     ],
     baselineFrozen: false,
   };
@@ -330,8 +334,9 @@ export default async function CreatorPage({ params }: { params: Promise<{ creato
             {boundaries.length ? (
               <ul style={{ margin: 0, paddingLeft: 16, fontSize: 11, lineHeight: 1.7 }}>
                 {boundaries.map((boundary, index) => (
-                  <li key={`${boundary.category}-${index}`}>
-                    <strong>{boundary.itemType}</strong> · {boundary.category}: {boundary.statement}
+                  <li key={`${boundary.boundaryType}-${index}`}>
+                    <strong>{boundary.severity}</strong> · {boundary.boundaryType}:{" "}
+                    {boundary.description}
                   </li>
                 ))}
               </ul>
