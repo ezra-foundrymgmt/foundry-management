@@ -242,6 +242,107 @@ export async function getLiveProspects(): Promise<LiveProspectRow[]> {
   }));
 }
 
+const workflowStepRowSchema = z.object({
+  step_key: z.string(),
+  status: z.string(),
+  ordinal: z.coerce.number(),
+  attempts: z.coerce.number(),
+  error_message: z.string().nullable(),
+  provider: z.string().nullable(),
+  external_id: z.string().nullable(),
+});
+const workflowRunRowsSchema = z.array(
+  z.object({
+    id: z.string().uuid(),
+    run_number: z.string(),
+    status: z.string(),
+    creator_id: z.string().uuid().nullable(),
+    started_at: z.string(),
+    completed_at: z.string().nullable(),
+    blockers_json: z.array(z.string()),
+    workflow_steps: z.array(workflowStepRowSchema),
+  }),
+);
+
+export interface LiveWorkflowStep {
+  name: string;
+  status: string;
+  attempts: number;
+  error: string | null;
+  provider: string | null;
+  externalId: string | null;
+}
+
+export interface LiveWorkflowRun {
+  id: string;
+  runNumber: string;
+  status: string;
+  creatorId: string | null;
+  creatorName: string;
+  startedAt: string;
+  completedAt: string | null;
+  blockers: string[];
+  steps: LiveWorkflowStep[];
+  /** Completed steps over total. Derived, never a hardcoded figure. */
+  progressPercent: number;
+}
+
+export async function getLiveWorkflowRuns(): Promise<LiveWorkflowRun[]> {
+  const { session, client } = await context();
+  const { data, error } = await client
+    .from("workflow_runs")
+    .select(
+      "id,run_number,status,creator_id,started_at,completed_at,blockers_json,workflow_steps(step_key,status,ordinal,attempts,error_message,provider,external_id)",
+    )
+    .eq("organization_id", session.organizationId)
+    .order("started_at", { ascending: false })
+    .limit(25);
+  if (error) throw new Error(`WORKFLOW_RUNS_READ_FAILED: ${error.message}`);
+  const rows = workflowRunRowsSchema.parse(data ?? []);
+  if (rows.length === 0) return [];
+
+  const creatorIds = rows
+    .map((row) => row.creator_id)
+    .filter((id): id is string => typeof id === "string");
+  const names = new Map<string, string>();
+  if (creatorIds.length) {
+    const creators = await client
+      .from("creators")
+      .select("id,stage_name")
+      .eq("organization_id", session.organizationId)
+      .in("id", creatorIds);
+    if (creators.error) throw new Error(`CREATOR_LOOKUP_FAILED: ${creators.error.message}`);
+    for (const row of z
+      .array(z.object({ id: z.string().uuid(), stage_name: z.string() }))
+      .parse(creators.data ?? []))
+      names.set(row.id, row.stage_name);
+  }
+
+  return rows.map((row) => {
+    const steps = [...row.workflow_steps].sort((a, b) => a.ordinal - b.ordinal);
+    const succeeded = steps.filter((step) => step.status === "SUCCEEDED").length;
+    return {
+      id: row.id,
+      runNumber: row.run_number,
+      status: row.status,
+      creatorId: row.creator_id,
+      creatorName: (row.creator_id && names.get(row.creator_id)) || "Unassigned",
+      startedAt: row.started_at,
+      completedAt: row.completed_at,
+      blockers: row.blockers_json,
+      steps: steps.map((step) => ({
+        name: step.step_key,
+        status: step.status,
+        attempts: step.attempts,
+        error: step.error_message,
+        provider: step.provider,
+        externalId: step.external_id,
+      })),
+      progressPercent: steps.length ? Math.round((succeeded / steps.length) * 100) : 0,
+    };
+  });
+}
+
 export async function getLiveAuditEvents() {
   const { session, client } = await context();
   const { data, error } = await client
