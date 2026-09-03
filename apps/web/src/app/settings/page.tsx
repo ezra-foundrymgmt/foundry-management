@@ -72,6 +72,17 @@ export default function SettingsPage() {
                 <p className="subtitle" style={{ lineHeight: 1.5 }}>
                   {item.desc}
                 </p>
+                {/* Says so on the card rather than leaving an operator to
+                    discover it by clicking. Only Integrations is built; the
+                    rest looked identical to it and behaved like dead cards. */}
+                {item.href ? null : (
+                  <span
+                    className="eyebrow"
+                    style={{ display: "inline-block", marginTop: 6, opacity: 0.7 }}
+                  >
+                    NOT BUILT YET
+                  </span>
+                )}
               </div>
             </>
           );

@@ -2,6 +2,7 @@ import { PIPELINE_STAGES, hasPermission, prospects } from "@creatoros/domain";
 import { AccessDenied } from "@/components/access-denied";
 import { DemoStrip, PageHeader } from "@/components/page-header";
 import { ProspectBoard, type ProspectCard } from "@/components/prospect-board";
+import { ProspectCreateForm } from "@/components/prospect-create-form";
 import { isMockMode } from "@/lib/environment";
 import { getLiveProspects } from "@/lib/live-data";
 import { authorizePage } from "@/lib/page-access";
@@ -38,11 +39,7 @@ export default async function ProspectsPage() {
         eyebrow="Acquisition CRM"
         title="Prospects"
         subtitle="Qualify opportunities with a consistent fit model and preserve every relationship touchpoint."
-        actions={
-          <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>
-            {PIPELINE_STAGES.length} stages configured
-          </span>
-        }
+        actions={mock ? null : <ProspectCreateForm />}
       />
       <ProspectBoard
         prospects={records}

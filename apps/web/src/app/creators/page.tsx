@@ -26,11 +26,11 @@ export default async function CreatorsPage() {
       <PageHeader
         eyebrow="Portfolio"
         title="Creators"
-        subtitle="The canonical operating record for every creator business managed by Foundry."
+        subtitle="Every creator business Foundry manages."
         actions={
-          <button className="button primary" disabled title="Use prospect conversion in live mode">
+          <a className="button primary" href="/crm/prospects">
             <Plus size={14} /> Add creator
-          </button>
+          </a>
         }
       />
       <section className="card">
