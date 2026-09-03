@@ -142,6 +142,42 @@ export async function claimSlackEvent(input: {
   return data === true;
 }
 
+/**
+ * Releases a claim so Slack's retry can process the event after all.
+ *
+ * Claiming happens before the work is enqueued, which is what makes retries
+ * safe. But if the enqueue then fails, the claim would deduplicate every retry
+ * and the mention would be lost forever with no error surfaced to anyone.
+ * Releasing restores the pre-claim state so the next delivery is treated as new.
+ */
+export async function releaseSlackEvent(input: {
+  slackTeamId: string;
+  slackEventId: string;
+}): Promise<void> {
+  const admin = createSupabaseAdminClient();
+  if (!admin) return;
+  await admin
+    .from("slack_event_deliveries")
+    .delete()
+    .eq("slack_team_id", input.slackTeamId)
+    .eq("slack_event_id", input.slackEventId);
+}
+
+/** Records that an event reached the queue, for after-the-fact diagnosis. */
+export async function markSlackEventQueued(input: {
+  slackTeamId: string;
+  slackEventId: string;
+  status: string;
+}): Promise<void> {
+  const admin = createSupabaseAdminClient();
+  if (!admin) return;
+  await admin
+    .from("slack_event_deliveries")
+    .update({ status: input.status, processed_at: new Date().toISOString() })
+    .eq("slack_team_id", input.slackTeamId)
+    .eq("slack_event_id", input.slackEventId);
+}
+
 const identitySchema = z.object({ user_id: z.string().uuid(), active: z.boolean() });
 
 /**

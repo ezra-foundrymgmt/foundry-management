@@ -7,6 +7,8 @@ import {
   claimSlackEvent,
   resolveSlackWorkspace,
   shouldProcessEvent,
+  markSlackEventQueued,
+  releaseSlackEvent,
   slackEventCallbackSchema,
   slackUrlVerificationSchema,
   stripMention,
@@ -114,20 +116,42 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, skipped: decision.reason });
   }
 
-  await inngest.send({
-    id: `slack:${event.team_id}:${event.event_id}`,
-    name: "slack.agent.requested",
-    data: {
-      organizationId: workspace.organizationId,
+  try {
+    await inngest.send({
+      id: `slack:${event.team_id}:${event.event_id}`,
+      name: "slack.agent.requested",
+      data: {
+        organizationId: workspace.organizationId,
+        slackTeamId: event.team_id,
+        slackEventId: event.event_id,
+        slackUserId: event.event.user,
+        channelId: event.event.channel,
+        threadTs: event.event.thread_ts ?? event.event.ts,
+        prompt: stripMention(event.event.text ?? ""),
+        correlationId,
+      },
+    });
+  } catch (error) {
+    // The claim is already held, so without releasing it every Slack retry
+    // would be deduplicated and this mention would be lost permanently with no
+    // error visible to the person who sent it.
+    await releaseSlackEvent({
       slackTeamId: event.team_id,
       slackEventId: event.event_id,
-      slackUserId: event.event.user,
-      channelId: event.event.channel,
-      threadTs: event.event.thread_ts ?? event.event.ts,
-      prompt: stripMention(event.event.text ?? ""),
+    }).catch(() => undefined);
+    logEvent("error", "slack.events.enqueue_failed", {
       correlationId,
-    },
-  });
+      slackEventId: event.event_id,
+      error: error instanceof Error ? error.message : "UNKNOWN",
+    });
+    return NextResponse.json({ error: "ENQUEUE_FAILED" }, { status: 500 });
+  }
+
+  await markSlackEventQueued({
+    slackTeamId: event.team_id,
+    slackEventId: event.event_id,
+    status: "QUEUED",
+  }).catch(() => undefined);
   logEvent("info", "slack.events.queued", {
     correlationId,
     organizationId: workspace.organizationId,
