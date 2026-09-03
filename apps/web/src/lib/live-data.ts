@@ -27,6 +27,7 @@ const prospectRowsSchema = z.array(
     pipeline_stage: z.string(),
     assigned_owner: z.string().uuid().nullable(),
     next_followup_at: z.string().nullable(),
+    updated_at: z.string(),
   }),
 );
 const auditRowsSchema = z.array(
@@ -94,6 +95,7 @@ export interface LiveProspectRow {
   pipelineStage: string;
   owner: string | null;
   nextFollowupAt: string | null;
+  updatedAt: string;
 }
 
 type AdminClient = NonNullable<ReturnType<typeof createSupabaseAdminClient>>;
@@ -218,7 +220,7 @@ export async function getLiveProspects(): Promise<LiveProspectRow[]> {
   const { data, error } = await client
     .from("prospects")
     .select(
-      "id,stage_name,niche,follower_count_estimate,fit_score,fit_tier,pipeline_stage,assigned_owner,next_followup_at",
+      "id,stage_name,niche,follower_count_estimate,fit_score,fit_tier,pipeline_stage,assigned_owner,next_followup_at,updated_at",
     )
     .eq("organization_id", session.organizationId)
     .is("archived_at", null)
@@ -239,6 +241,7 @@ export async function getLiveProspects(): Promise<LiveProspectRow[]> {
     pipelineStage: row.pipeline_stage,
     owner: row.assigned_owner ? (owners.get(row.assigned_owner) ?? null) : null,
     nextFollowupAt: row.next_followup_at,
+    updatedAt: row.updated_at,
   }));
 }
 
@@ -471,13 +474,22 @@ export async function getLivePnlRows(): Promise<LivePnlRow[]> {
       periodStart: row.period_start,
       periodEnd: row.period_end,
       receipts: row.creator_platform_receipts,
-      commissionRate: row.commission_rate,
+      // Stored as fractions (0.3, matching calculateCreatorPnl's input/output
+      // convention in packages/domain/src/pnl.ts) but LivePnlRow -- and the
+      // economics page that renders it with a bare "%" and feeds it into
+      // marginBand()'s 50/35 thresholds -- means 0-100. Left unconverted, a
+      // real margin (always < 1) always read as CRITICAL.
+      commissionRate: toPercent(row.commission_rate),
       foundryRevenue: row.foundry_revenue,
       directCosts: recorded.length ? recorded.reduce((sum, value) => sum + value, 0) : null,
       contributionProfit: row.contribution_profit,
-      contributionMargin: row.contribution_margin,
+      contributionMargin: toPercent(row.contribution_margin),
     };
   });
+}
+
+function toPercent(fraction: number | null): number | null {
+  return fraction === null ? null : Math.round(fraction * 1000) / 10;
 }
 
 export interface LiveTaskRow {
@@ -497,6 +509,12 @@ export async function getLiveTasks(): Promise<LiveTaskRow[]> {
     .from("tasks")
     .select("id,title,creator_id,department,priority,status,due_at,source_type")
     .eq("organization_id", session.organizationId)
+    // Only this page's pulse counts (open/overdue) consume the result, and
+    // without this a completed task with an old due_at sorted ahead of a
+    // currently open one -- an org with real history could fill the 200-row
+    // cap with DONE tasks before the query ever reached the open ones,
+    // silently undercounting both figures.
+    .neq("status", "DONE")
     .order("due_at", { ascending: true, nullsFirst: false })
     .limit(200);
   if (error) throw new Error(`TASKS_READ_FAILED: ${error.message}`);
@@ -917,8 +935,21 @@ export async function getLiveCreatorDetail(creatorId: string): Promise<LiveCreat
       .eq("organization_id", session.organizationId)
       .eq("creator_id", creatorId),
   ]);
+  // Every parallel query checked, not just two of eight. An unchecked error
+  // here does not throw -- Supabase returns data: null on failure, which the
+  // code below reads exactly like "no rows found" (empty integrations, no
+  // latest report, no brand profile, no boundaries, zero baselines). A
+  // transient failure on any of these used to render as a clean, empty
+  // creator record instead of the read failure it actually was.
   if (revenue.error) throw new Error(`REVENUE_READ_FAILED: ${revenue.error.message}`);
+  if (connections.error) throw new Error(`INTEGRATIONS_READ_FAILED: ${connections.error.message}`);
   if (taskResult.error) throw new Error(`TASKS_READ_FAILED: ${taskResult.error.message}`);
+  if (reportResult.error) throw new Error(`REPORT_READ_FAILED: ${reportResult.error.message}`);
+  if (brandResult.error) throw new Error(`BRAND_PROFILE_READ_FAILED: ${brandResult.error.message}`);
+  if (boundaryResult.error)
+    throw new Error(`BOUNDARIES_READ_FAILED: ${boundaryResult.error.message}`);
+  if (baselineResult.error)
+    throw new Error(`BASELINE_READ_FAILED: ${baselineResult.error.message}`);
 
   const cutoff = isoDaysAgo(30);
   let current = 0;

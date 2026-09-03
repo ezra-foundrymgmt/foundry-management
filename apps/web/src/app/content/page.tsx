@@ -2,7 +2,7 @@ import { AccessDenied } from "@/components/access-denied";
 import { DemoStrip, PageHeader } from "@/components/page-header";
 import { LiveEmpty } from "@/components/live-empty";
 import { StatusBadge } from "@/components/status-badge";
-import { formatCount } from "@/lib/format";
+import { formatCount, UNKNOWN_DISPLAY } from "@/lib/format";
 import { isMockMode } from "@/lib/environment";
 import { getLiveContentAssets, type LiveContentRow } from "@/lib/live-data";
 import { authorizePage } from "@/lib/page-access";
@@ -90,7 +90,15 @@ export default async function ContentPage() {
                     <td>{asset.inventoryCategory ?? "Uncategorised"}</td>
                     <td>{formatCount(asset.usedCount)}</td>
                     <td>
-                      <StatusBadge value={asset.approvalStatus ?? "PENDING"} />
+                      {/* null means no approval workflow has recorded a status
+                          for this asset -- not the same as "awaiting review".
+                          Fabricating PENDING claimed a specific state nobody
+                          actually observed. */}
+                      {asset.approvalStatus === null ? (
+                        <span style={{ color: "var(--ink-soft)" }}>{UNKNOWN_DISPLAY}</span>
+                      ) : (
+                        <StatusBadge value={asset.approvalStatus} />
+                      )}
                     </td>
                   </tr>
                 ))}

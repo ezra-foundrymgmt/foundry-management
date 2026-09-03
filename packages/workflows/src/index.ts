@@ -289,7 +289,28 @@ export class OnboardingService {
 
   async #createRunLocked(creator: OnboardingCreator): Promise<WorkflowRun> {
     const existing = await this.repository.findActiveRun(creator.id);
-    if (existing) return existing;
+    if (existing) {
+      // A BLOCKED run is a parked decision, not a completed one -- unlike
+      // every other non-terminal status, nothing else in this class ever
+      // re-derives it. Returning it unchanged meant a creator whose
+      // prerequisites were later fixed could never activate again: the DB's
+      // one-active-run-per-creator index made a fresh run impossible to
+      // create, and neither this function nor advance() ever re-checked
+      // whether the original reason still held.
+      if (existing.status !== "BLOCKED") return existing;
+      const blockers = this.#prerequisiteBlockers(creator);
+      if (blockers.length > 0) {
+        if (blockers.join(" ") !== existing.blockers.join(" ")) {
+          existing.blockers = blockers;
+          await this.repository.saveRun(existing);
+        }
+        return existing;
+      }
+      existing.status = "RUNNING";
+      existing.blockers = [];
+      await this.repository.saveRun(existing);
+      return existing;
+    }
     const blockers = this.#prerequisiteBlockers(creator);
     const now = new Date().toISOString();
     const run: WorkflowRun = {

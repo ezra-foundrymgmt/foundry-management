@@ -78,7 +78,16 @@ export default async function WorkflowsPage() {
 
 function WorkflowRunCard({ run, live }: { run: LiveWorkflowRun; live: boolean }) {
   const failed = run.steps.find((step) => step.status === "FAILED");
-  const resumable = run.status === "WAITING_EXTERNAL" || run.status === "FAILED";
+  // BLOCKED belongs here too: it means prerequisites were missing when the
+  // run was created, not that the run is finished. Resume re-checks them
+  // (packages/workflows/src/index.ts's #createRunLocked) and, unlike
+  // clicking "Start activation" again, sends a fresh per-call idempotency
+  // key -- the same event the button below sent already exists at Inngest
+  // and would otherwise be silently deduplicated forever. Without this, a
+  // creator blocked once could never be activated, having no way to trigger
+  // a run that actually re-executes.
+  const resumable =
+    run.status === "WAITING_EXTERNAL" || run.status === "FAILED" || run.status === "BLOCKED";
   // Names the step the run is parked on, so the blocker shown is the real one
   // rather than a fixed string that could outlive the condition it describes.
   const waitingStep = run.steps.find((step) => step.status === "WAITING_EXTERNAL");

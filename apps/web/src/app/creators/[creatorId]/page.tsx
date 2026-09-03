@@ -20,6 +20,7 @@ import {
 import { evaluateActivationReadiness } from "@/lib/activation-readiness";
 import { isMockMode } from "@/lib/environment";
 import { getLiveCreatorDetail, type LiveCreatorDetail } from "@/lib/live-data";
+import { captureException } from "@/lib/observability";
 import { authorizePage } from "@/lib/page-access";
 
 /** Builds the same shape from fixtures so there is a single render path. */
@@ -114,10 +115,21 @@ export default async function CreatorPage({ params }: { params: Promise<{ creato
         creatorId,
       })
         .then((result) => ({ evaluated: true, readiness: result }) as const)
-        .catch((error: unknown) => ({
-          evaluated: false as const,
-          reason: error instanceof Error ? error.message : "readiness could not be read",
-        }));
+        .catch((error: unknown) => {
+          // The real error (raw Postgres text, table names) goes to the
+          // server log only. What reaches the browser used to be
+          // error.message itself -- a query failure on this page rendered
+          // internal schema detail straight into the creator detail view.
+          captureException(error, {
+            event: "creator.readiness_evaluation_failed",
+            organizationId: access.session.organizationId,
+            creatorId,
+          });
+          return {
+            evaluated: false as const,
+            reason: "readiness could not be read",
+          };
+        });
 
   return (
     <main className="page">

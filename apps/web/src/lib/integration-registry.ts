@@ -15,6 +15,7 @@ import {
 } from "@/lib/integration-crypto";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { appendAudit } from "@/lib/audit";
+import { logEvent } from "@/lib/observability";
 
 export type OAuthProvider = "SLACK" | "NOTION";
 
@@ -242,6 +243,11 @@ export async function updateIntegrationHealth(
   },
 ) {
   const now = new Date().toISOString();
+  // The route reads a token, then awaits an external health-check request
+  // before calling this -- a real network round trip a Disconnect can land
+  // inside of. Without the DISCONNECTED guard, this write reached the row
+  // unconditionally and could resurrect status CONNECTED/DEGRADED onto a
+  // connection whose credentials disconnectIntegration had already deleted.
   const update = await requireAdmin()
     .from("integration_connections")
     .update({
@@ -256,8 +262,32 @@ export async function updateIntegrationHealth(
     })
     .eq("organization_id", session.organizationId)
     .eq("provider", provider)
-    .is("creator_id", null);
+    .is("creator_id", null)
+    .neq("status", "DISCONNECTED")
+    .select("id")
+    .maybeSingle();
   if (update.error) throw new Error(`INTEGRATION_HEALTH_SAVE_FAILED: ${update.error.message}`);
+  // No row matched: the connection was disconnected in the gap between this
+  // health check starting and finishing. The result is moot, not an error.
+  if (!update.data) return;
+
+  // Best-effort: the health status above already committed, so a failure
+  // here must not turn a successful health check into a 502 the caller reads
+  // as "nothing happened."
+  try {
+    await appendAudit(
+      session,
+      `${provider.toLowerCase()}.health_checked`,
+      "integration_connection",
+      String(update.data.id),
+      { ok: result.ok, error: result.error ?? null },
+    );
+  } catch (auditError) {
+    logEvent("error", "integration.health_audit_failed", {
+      provider,
+      message: auditError instanceof Error ? auditError.message : String(auditError),
+    });
+  }
 }
 
 /**

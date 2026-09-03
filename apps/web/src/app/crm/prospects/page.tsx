@@ -1,4 +1,4 @@
-import { PIPELINE_STAGES, prospects } from "@creatoros/domain";
+import { PIPELINE_STAGES, hasPermission, prospects } from "@creatoros/domain";
 import { AccessDenied } from "@/components/access-denied";
 import { DemoStrip, PageHeader } from "@/components/page-header";
 import { ProspectBoard, type ProspectCard } from "@/components/prospect-board";
@@ -25,6 +25,9 @@ export default async function ProspectsPage() {
         pipelineStage: prospect.pipelineStage,
         owner: prospect.owner,
         nextFollowupAt: null,
+        // Unused: the board is read-only in mock mode, so this never backs a
+        // PATCH's optimistic-concurrency check.
+        updatedAt: "1970-01-01T00:00:00.000Z",
       }))
     : await getLiveProspects();
 
@@ -41,7 +44,11 @@ export default async function ProspectsPage() {
           </span>
         }
       />
-      <ProspectBoard prospects={records} readOnly={mock} />
+      <ProspectBoard
+        prospects={records}
+        readOnly={mock}
+        canConvertToCreator={hasPermission(access.session.role, "creator.create")}
+      />
     </main>
   );
 }

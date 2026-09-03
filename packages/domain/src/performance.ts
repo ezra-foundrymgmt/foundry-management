@@ -21,8 +21,12 @@ export function performanceMultiplier(metric: number, rollingMedian: number | nu
 
 export function classifyPerformance(
   multiplier: number | null,
-): "OPPORTUNITY" | "BASELINE" | "WEAK" {
-  if (multiplier === null) return "BASELINE";
+): "OPPORTUNITY" | "BASELINE" | "WEAK" | "UNKNOWN" {
+  // No rolling median to compare against is not the same claim as "performed
+  // exactly at the expected median" -- collapsing the two meant a format with
+  // no comparison history read identically to one that was actually measured
+  // and unremarkable.
+  if (multiplier === null) return "UNKNOWN";
   if (multiplier >= 1.5) return "OPPORTUNITY";
   if (multiplier < 0.75) return "WEAK";
   return "BASELINE";

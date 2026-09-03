@@ -28,8 +28,12 @@ export const prospectUpdateSchema = z
     fitTier: z.string().trim().max(40).optional(),
     opportunityNotes: z.string().trim().max(4000).optional(),
     archived: z.boolean().optional(),
+    // PostgREST always serializes timestamptz with a numeric offset (+00:00),
+    // never a bare Z, so the token round-tripped from a GET must be accepted
+    // in that form.
+    updatedAt: z.string().datetime({ offset: true }),
   })
-  .refine((value) => Object.keys(value).length > 0, { message: "NO_FIELDS_TO_UPDATE" });
+  .refine((value) => Object.keys(value).length > 1, { message: "NO_FIELDS_TO_UPDATE" });
 
 export const prospectActivitySchema = z.object({
   activityType: z.enum(["NOTE", "CALL", "EMAIL", "DM", "MEETING", "STAGE_CHANGE"]),
@@ -150,13 +154,23 @@ export async function updateProspect(
   const client = admin();
   const current = await client
     .from("prospects")
-    .select("id,pipeline_stage,prospect_number")
+    .select("id,pipeline_stage,prospect_number,updated_at")
     .eq("organization_id", session.organizationId)
     .eq("id", prospectId)
     .maybeSingle();
   if (current.error) throw databaseFailure("read-current", current.error);
   if (!current.data) throw new ProspectError("PROSPECT_NOT_FOUND", 404);
-  const before = current.data as { pipeline_stage: string; prospect_number: string };
+  const before = current.data as {
+    pipeline_stage: string;
+    prospect_number: string;
+    updated_at: string;
+  };
+  // Two operators moving the same card from a stale board both used to win
+  // silently -- whichever PATCH landed last overwrote the other's change with
+  // no signal that anything was lost. Same guard as updateCreatorPriority
+  // (apps/web/src/lib/creators.ts).
+  if (before.updated_at !== input.updatedAt)
+    throw new ProspectError("PROSPECT_CHANGED_REFRESH_REQUIRED", 409);
 
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (input.pipelineStage !== undefined) patch["pipeline_stage"] = input.pipelineStage;
@@ -177,10 +191,14 @@ export async function updateProspect(
     .update(patch)
     .eq("organization_id", session.organizationId)
     .eq("id", prospectId)
+    .eq("updated_at", input.updatedAt)
     .select("id,prospect_number,pipeline_stage,archived_at")
     .maybeSingle();
   if (error) throw databaseFailure("write", error);
-  if (!data) throw new ProspectError("PROSPECT_NOT_FOUND", 404);
+  // Distinct from PROSPECT_NOT_FOUND above: the row exists, but updated_at no
+  // longer matches what was just read -- someone else's write landed in the
+  // gap between the read and this one.
+  if (!data) throw new ProspectError("PROSPECT_CHANGED_REFRESH_REQUIRED", 409);
 
   // A stage change is the event operators reconstruct a pipeline from, so it is
   // written to the activity timeline as well as the audit log.

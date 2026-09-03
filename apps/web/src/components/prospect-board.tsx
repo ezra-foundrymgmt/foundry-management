@@ -18,16 +18,17 @@ export interface ProspectCard {
   pipelineStage: string;
   owner: string | null;
   nextFollowupAt: string | null;
+  updatedAt: string;
 }
-
-const VISIBLE_STAGES = ["FOLLOW_UP", "AUDIT", "DISCOVERY", "SIGNED"] as const;
 
 export function ProspectBoard({
   prospects,
   readOnly,
+  canConvertToCreator,
 }: {
   prospects: ProspectCard[];
   readOnly: boolean;
+  canConvertToCreator: boolean;
 }) {
   const [query, setQuery] = useState("");
   const [onlyFollowUpDue, setOnlyFollowUpDue] = useState(false);
@@ -54,16 +55,21 @@ export function ProspectBoard({
     });
   }, [prospects, query, onlyFollowUpDue]);
 
-  async function patch(id: string, body: Record<string, unknown>) {
-    setBusyId(id);
+  async function patch(prospect: ProspectCard, body: Record<string, unknown>) {
+    setBusyId(prospect.id);
     setError(null);
     try {
-      const response = await fetch(`/api/prospects/${id}`, {
+      const response = await fetch(`/api/prospects/${prospect.id}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
+        // updatedAt is the optimistic-concurrency token this card was loaded
+        // with. A 409 means someone else changed the prospect first.
+        body: JSON.stringify({ ...body, updatedAt: prospect.updatedAt }),
       });
       if (!response.ok) {
+        if (response.status === 409) {
+          throw new Error("Someone else updated this prospect first. Refresh and try again.");
+        }
         const payload = (await response.json().catch(() => ({}))) as { error?: string };
         throw new Error(payload.error ?? `Request failed (${response.status})`);
       }
@@ -108,7 +114,10 @@ export function ProspectBoard({
       ) : null}
 
       <section className="grid kanban" aria-label="Prospect pipeline">
-        {VISIBLE_STAGES.map((stage) => {
+        {/* Every canonical stage, not a hardcoded subset -- a prospect in a
+            stage left off that subset used to be filtered out of the board
+            entirely, with no column to show it was missing. */}
+        {PIPELINE_STAGES.map((stage) => {
           const items = filtered.filter((prospect) => prospect.pipelineStage === stage);
           return (
             <div className="kanban-column" key={stage}>
@@ -159,7 +168,7 @@ export function ProspectBoard({
                           value={prospect.pipelineStage}
                           disabled={busyId === prospect.id}
                           onChange={(event) =>
-                            void patch(prospect.id, { pipelineStage: event.target.value })
+                            void patch(prospect, { pipelineStage: event.target.value })
                           }
                         >
                           {PIPELINE_STAGES.map((option) => (
@@ -172,14 +181,18 @@ export function ProspectBoard({
                           type="button"
                           className="button"
                           disabled={busyId === prospect.id}
-                          onClick={() => void patch(prospect.id, { archived: true })}
+                          onClick={() => void patch(prospect, { archived: true })}
                         >
                           Archive
                         </button>
                       </div>
                     )}
 
-                    {prospect.pipelineStage === "SIGNED" ? (
+                    {/* The server requires creator.create for this action, which
+                        only super_admin holds -- showing the button to every role
+                        that can view this board (growth, creator_success, ...)
+                        meant clicking it as anyone else always failed server-side. */}
+                    {prospect.pipelineStage === "SIGNED" && canConvertToCreator ? (
                       <div style={{ marginTop: 12 }}>
                         <ConvertProspectButton prospectId={prospect.id} />
                       </div>

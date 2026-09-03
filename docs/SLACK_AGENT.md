@@ -56,17 +56,20 @@ Low-risk writes:
 | `create_content_request` | `task.create`   | no            |
 | `acknowledge_alert`      | `task.complete` | **yes**       |
 
+Workflow control -- these queue a run rather than executing it inline, and
+report what was queued, not that the activation finished:
+
+| Tool                       | Permission       | Internal only |
+| --------------------------- | ---------------- | ------------- |
+| `start_creator_activation`  | `workflow.start`  | **yes**       |
+| `retry_workflow`            | `workflow.retry`  | **yes**       |
+
 So it can answer, for a creator the asker is allowed to see: what their status
 and health are, what is open against them, what the recent daily reports said,
 what experiments have run, and — across the portfolio — which incidents are
 open, who is at risk, and what is overdue. It can open an internal task, file a
-content request, and acknowledge an incident.
-
-`start_creator_activation` and `retry_workflow` are **deliberately not exposed
-yet.** The routes exist (`POST /api/onboarding`, `POST /api/workflows/resume`)
-and are permissioned, but starting a real creator activation from a chat message
-has not been rehearsed against live Slack. Adding them is a small change to
-`AGENT_TOOLS` once the read path has been exercised.
+content request, acknowledge an incident, queue a creator's activation, and
+queue a resume for a run that is waiting or has been repaired.
 
 ## What it cannot do
 
@@ -139,8 +142,11 @@ From `apps/web/src/lib/agent/prompt.ts`:
 
 Every turn writes an `agent_interactions` row: who asked, from which Slack
 channel, the prompt, the tools called with their outcomes, the model, and the
-reply. Failures record `status = FAILED` with the error. The table is tenant
-isolated and readable in-app by members of the owning organization.
+reply. Failures record `status = FAILED` with the error. Like every other
+table since `202609020012_close_postgrest_read_bypass.sql`, `agent_interactions`
+has no RLS grant to `authenticated` — it is written by the service role from
+the Inngest function and, as of this writing, nothing in the app reads it back;
+inspecting it means a direct database query, not a page in CreatorOS.
 
 ## Cost and limits
 

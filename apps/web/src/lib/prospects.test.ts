@@ -82,8 +82,17 @@ describe("prospect input validation", () => {
   });
 
   it("only accepts a pipeline stage from the canonical list", () => {
-    expect(prospectUpdateSchema.safeParse({ pipelineStage: "SIGNED" }).success).toBe(true);
-    expect(prospectUpdateSchema.safeParse({ pipelineStage: "MADE_UP" }).success).toBe(false);
+    const updatedAt = "2026-01-01T00:00:00.000Z";
+    expect(
+      prospectUpdateSchema.safeParse({ pipelineStage: "SIGNED", updatedAt }).success,
+    ).toBe(true);
+    expect(
+      prospectUpdateSchema.safeParse({ pipelineStage: "MADE_UP", updatedAt }).success,
+    ).toBe(false);
+  });
+
+  it("requires an updatedAt concurrency token even when a field is present", () => {
+    expect(prospectUpdateSchema.safeParse({ pipelineStage: "SIGNED" }).success).toBe(false);
   });
 });
 
@@ -147,15 +156,43 @@ describe("prospect updates", () => {
   it("refuses a prospect that does not belong to the caller's organization", async () => {
     rows = null;
     await expect(
-      updateProspect(session, "33333333-3333-4333-8333-333333333333", { pipelineStage: "AUDIT" }),
+      updateProspect(session, "33333333-3333-4333-8333-333333333333", {
+        pipelineStage: "AUDIT",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }),
     ).rejects.toThrow("PROSPECT_NOT_FOUND");
   });
 
+  it("refuses an update against a stale updatedAt instead of silently overwriting a concurrent change", async () => {
+    // Regression: updateProspect had no optimistic-concurrency check at all --
+    // two operators moving the same card from a stale board both won
+    // silently, one clobbering the other with no signal anything was lost.
+    rows = {
+      id: "p1",
+      pipeline_stage: "FOLLOW_UP",
+      prospect_number: "PR-000001",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    };
+    await expect(
+      updateProspect(session, "33333333-3333-4333-8333-333333333333", {
+        pipelineStage: "AUDIT",
+        updatedAt: "2025-01-01T00:00:00.000Z",
+      }),
+    ).rejects.toThrow("PROSPECT_CHANGED_REFRESH_REQUIRED");
+    expect(recorded.some((query) => query.op === "update")).toBe(false);
+  });
+
   it("scopes both the ownership check and the update to the caller's organization", async () => {
-    rows = { id: "p1", pipeline_stage: "FOLLOW_UP", prospect_number: "PR-000001" };
+    rows = {
+      id: "p1",
+      pipeline_stage: "FOLLOW_UP",
+      prospect_number: "PR-000001",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    };
     insertResult = null;
     await updateProspect(session, "33333333-3333-4333-8333-333333333333", {
       pipelineStage: "AUDIT",
+      updatedAt: "2026-01-01T00:00:00.000Z",
     }).catch(() => undefined);
     for (const query of recorded.filter((entry) => entry.table === "prospects"))
       expect(
@@ -164,9 +201,15 @@ describe("prospect updates", () => {
   });
 
   it("archives by stamping archived_at rather than deleting the record", async () => {
-    rows = { id: "p1", pipeline_stage: "FOLLOW_UP", prospect_number: "PR-000001" };
+    rows = {
+      id: "p1",
+      pipeline_stage: "FOLLOW_UP",
+      prospect_number: "PR-000001",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    };
     await updateProspect(session, "33333333-3333-4333-8333-333333333333", {
       archived: true,
+      updatedAt: "2026-01-01T00:00:00.000Z",
     }).catch(() => undefined);
     const update = recorded.find((query) => query.op === "update" && query.table === "prospects");
     expect(update?.payload?.["archived_at"]).toBeTruthy();
@@ -174,9 +217,15 @@ describe("prospect updates", () => {
   });
 
   it("records a stage change on the activity timeline", async () => {
-    rows = { id: "p1", pipeline_stage: "FOLLOW_UP", prospect_number: "PR-000001" };
+    rows = {
+      id: "p1",
+      pipeline_stage: "FOLLOW_UP",
+      prospect_number: "PR-000001",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    };
     await updateProspect(session, "33333333-3333-4333-8333-333333333333", {
       pipelineStage: "AUDIT",
+      updatedAt: "2026-01-01T00:00:00.000Z",
     }).catch(() => undefined);
     const activity = recorded.find((query) => query.table === "prospect_activities");
     expect(activity?.payload?.["activity_type"]).toBe("STAGE_CHANGE");
@@ -185,9 +234,15 @@ describe("prospect updates", () => {
   });
 
   it("does not log a stage change when the stage did not change", async () => {
-    rows = { id: "p1", pipeline_stage: "AUDIT", prospect_number: "PR-000001" };
+    rows = {
+      id: "p1",
+      pipeline_stage: "AUDIT",
+      prospect_number: "PR-000001",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    };
     await updateProspect(session, "33333333-3333-4333-8333-333333333333", {
       pipelineStage: "AUDIT",
+      updatedAt: "2026-01-01T00:00:00.000Z",
     }).catch(() => undefined);
     expect(recorded.some((query) => query.table === "prospect_activities")).toBe(false);
   });

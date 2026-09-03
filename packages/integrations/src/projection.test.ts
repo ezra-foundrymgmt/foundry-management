@@ -75,6 +75,23 @@ describe("creator-facing projection boundary", () => {
       expect(() => assertProjectableFields({ status: value })).toThrow("NOTION_PROJECTION_REFUSED");
   });
 
+  it("refuses restricted phrases joined by visible punctuation, not just whitespace", () => {
+    // Regression: canonicalize() only collapses whitespace and folds
+    // confusables/format characters -- it does not touch punctuation, so a
+    // literal separator here survives unchanged. The old \s*-only patterns
+    // matched a zero-width-joined or whitespace-joined phrase but missed the
+    // exact same evasion spelled with a hyphen, comma, or underscore instead.
+    const evasions = [
+      "contribution-margin is 41%",
+      "commission, rate: 30%",
+      "unit_economics review",
+      "founder.note: keep this quiet",
+      "internal/incident summary",
+    ];
+    for (const value of evasions)
+      expect(() => assertProjectableFields({ status: value })).toThrow("NOTION_PROJECTION_REFUSED");
+  });
+
   it("catches plural forms of credential words", () => {
     for (const value of ["here are the tokens", "rotate the secrets", "api keys attached"])
       expect(() => assertProjectableFields({ resources: value })).toThrow(

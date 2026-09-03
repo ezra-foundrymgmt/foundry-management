@@ -99,7 +99,7 @@ export default async function CreatorsPage() {
                       ? UNKNOWN_DISPLAY
                       : `${creator.contentBufferDays} days`}
                   </td>
-                  <td>{creator.owner}</td>
+                  <td>{creator.owner ?? "Unassigned"}</td>
                   <td>
                     <StatusBadge value={creator.integrationHealth} />
                   </td>

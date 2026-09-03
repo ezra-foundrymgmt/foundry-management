@@ -93,6 +93,14 @@ describe("creator-relative performance", () => {
     expect(classifyPerformance(performanceMultiplier(63, 100))).toBe("WEAK");
   });
 
+  it("reports no rolling median as unknown, not as a measured baseline", () => {
+    // Regression: a null multiplier (no comparison history yet) used to
+    // collapse into "BASELINE" -- the same label as a format that was
+    // actually measured and came out unremarkable.
+    expect(classifyPerformance(performanceMultiplier(220, null))).toBe("UNKNOWN");
+    expect(classifyPerformance(null)).toBe("UNKNOWN");
+  });
+
   it("avoids division-by-zero false precision", () => expect(safeRate(10, 0)).toBeNull());
 });
 

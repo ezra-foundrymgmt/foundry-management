@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
+import type { WorkDepartment, WorkPriority } from "@creatoros/domain";
 import { z } from "zod";
 import { AuthorizationError, requirePermission } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { TaskError, createTask, taskCreateSchema } from "@/lib/tasks";
+
+const DEFAULT_DEPARTMENT: WorkDepartment = "Operations";
+const DEFAULT_PRIORITY: WorkPriority = "MEDIUM";
 
 const rowsSchema = z.array(
   z.object({
@@ -51,8 +55,12 @@ export async function GET() {
       creatorId: row.creator_id,
       creatorName: row.creators?.stage_name ?? "Foundry",
       title: row.title,
-      department: row.department ?? "OPERATIONS",
-      priority: row.priority ?? "NORMAL",
+      // Canonical casing (WORK_DEPARTMENTS is "Operations", not "OPERATIONS")
+      // and a value that actually exists in WORK_PRIORITIES -- "NORMAL" isn't
+      // one of them, so a task with no priority set rendered a status the
+      // rest of the app never produces and StatusBadge had no styling for.
+      department: row.department ?? DEFAULT_DEPARTMENT,
+      priority: row.priority ?? DEFAULT_PRIORITY,
       status: row.status,
       owner: row.owner_user_id ? "Assigned user" : "Unassigned",
       dueAt: row.due_at ? new Date(row.due_at).toLocaleDateString() : "Unscheduled",

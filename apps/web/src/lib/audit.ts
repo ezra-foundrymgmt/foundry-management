@@ -11,7 +11,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
  * a change. The actor always comes from the session, never from a request.
  */
 export async function appendAudit(
-  session: AppSession,
+  session: Pick<AppSession, "userId" | "organizationId">,
   action: string,
   resourceType: string,
   resourceId: string,

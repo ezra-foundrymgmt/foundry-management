@@ -34,19 +34,31 @@ export type ProjectableCreatorField = (typeof PROJECTABLE_CREATOR_FIELDS)[number
  * projectable field by mistake. This is a backstop behind the allowlist, not
  * the primary control: it catches an approved field carrying the wrong content.
  */
-// Separators are `\s*`, not `\s+`: stripping a zero-width space or soft hyphen
-// joins the two words, and a pattern requiring whitespace would then miss the
-// very evasion the stripping exists to defeat.
+// Separators tolerate zero or more of whitespace, punctuation, OR symbol
+// characters, not just whitespace: stripping a zero-width space or soft
+// hyphen joins the two words (so zero separators must still match), but a
+// literal, visible separator -- "contribution-margin", "commission, rate",
+// "unit_economics" -- survives canonicalize() completely unchanged. It only
+// collapses whitespace runs and folds confusables/format characters; it does
+// not touch punctuation. A pattern that only ever skipped \s therefore missed
+// every punctuation-joined variant of a restricted phrase.
+const SEP = "[\\s\\p{P}\\p{S}]*";
+function restricted(source: string): RegExp {
+  return new RegExp(source.replaceAll(" ", SEP), "iu");
+}
 const RESTRICTED_VALUE_PATTERNS: ReadonlyArray<{ label: string; pattern: RegExp }> = [
-  { label: "contribution margin", pattern: /contribution\s*(margin|profit)/i },
-  { label: "profit and loss", pattern: /\bp\s*&\s*l\b|profit\s*and\s*loss/i },
-  { label: "unit economics", pattern: /unit\s*economics/i },
-  { label: "commission rate", pattern: /commission\s*rate/i },
-  { label: "Foundry revenue", pattern: /foundry\s*revenue/i },
-  { label: "employee QA", pattern: /employee\s*qa|qa\s*score/i },
-  { label: "founder notes", pattern: /founder\s*note/i },
-  { label: "legal analysis", pattern: /legal\s*(analysis|opinion|advice)/i },
-  { label: "internal incident", pattern: /internal\s*incident|incident\s*report/i },
+  { label: "contribution margin", pattern: restricted("contribution (margin|profit)") },
+  {
+    label: "profit and loss",
+    pattern: restricted("\\bp & l\\b|profit and loss"),
+  },
+  { label: "unit economics", pattern: restricted("unit economics") },
+  { label: "commission rate", pattern: restricted("commission rate") },
+  { label: "Foundry revenue", pattern: restricted("foundry revenue") },
+  { label: "employee QA", pattern: restricted("employee qa|qa score") },
+  { label: "founder notes", pattern: restricted("founder note") },
+  { label: "legal analysis", pattern: restricted("legal (analysis|opinion|advice)") },
+  { label: "internal incident", pattern: restricted("internal incident|incident report") },
   { label: "credential", pattern: /\b(api[_\s-]?keys?|secrets?|passwords?|bearer|tokens?)\b/i },
 ];
 

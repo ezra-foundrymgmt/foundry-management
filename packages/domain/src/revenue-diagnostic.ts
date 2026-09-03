@@ -120,9 +120,14 @@ export function generateDailyReport(input: DiagnosticInput): DailyReport {
           ? "Reach deterioration is constraining new audience acquisition."
           : "Performance is within expected creator-relative ranges.",
     primaryBottleneck,
+    // Only a CRITICAL or WARNING anomaly makes the report urgent. An
+    // OPPORTUNITY is good news -- a creator whose only anomaly was reach
+    // running 20%+ above baseline used to get flagged HIGH, the same
+    // priority as an actual problem, because this only checked whether any
+    // anomaly existed rather than what kind.
     priority: anomalies.some((item) => item.severity === "CRITICAL")
       ? "CRITICAL"
-      : anomalies.length > 0
+      : anomalies.some((item) => item.severity === "WARNING")
         ? "HIGH"
         : "NORMAL",
     metrics: input.current,

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { AuthorizationError, requirePermission } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { logEvent } from "@/lib/observability";
 import { TaskError, taskPrioritySchema, updateTaskPriority } from "@/lib/tasks";
 
 const bodySchema = z.object({
@@ -71,18 +72,31 @@ export async function PATCH(request: Request, context: { params: Promise<{ taskI
       .maybeSingle();
     if (update.error || !update.data)
       return NextResponse.json({ error: "TASK_CHANGED_REFRESH_REQUIRED" }, { status: 409 });
-    const audit = await client.from("audit_events").insert({
-      organization_id: session.organizationId,
-      actor_type: "user",
-      actor_user_id: session.userId,
-      action: "task.status.changed",
-      resource_type: "task",
-      resource_id: taskId,
-      before_json: { status: task.data.status },
-      after_json: { status: body.data.status },
-      correlation_id: crypto.randomUUID(),
-    });
-    if (audit.error) throw new Error(audit.error.message);
+    // Best-effort, same as every other write path (apps/web/src/lib/tasks.ts's
+    // auditBestEffort): the status change above already committed, so a
+    // failure writing the audit row must not turn into a 500 that tells the
+    // caller nothing happened -- it did, and a caller that retries a "failed"
+    // request would attempt an invalid transition against the new status.
+    try {
+      const audit = await client.from("audit_events").insert({
+        organization_id: session.organizationId,
+        actor_type: "user",
+        actor_user_id: session.userId,
+        action: "task.status.changed",
+        resource_type: "task",
+        resource_id: taskId,
+        before_json: { status: task.data.status },
+        after_json: { status: body.data.status },
+        correlation_id: crypto.randomUUID(),
+      });
+      if (audit.error) throw new Error(audit.error.message);
+    } catch (auditError) {
+      logEvent("error", "task.status_audit_failed", {
+        taskId,
+        userId: session.userId,
+        message: auditError instanceof Error ? auditError.message : String(auditError),
+      });
+    }
     return NextResponse.json({ id: taskId, status: body.data.status, updatedAt });
   } catch (error) {
     if (error instanceof AuthorizationError)

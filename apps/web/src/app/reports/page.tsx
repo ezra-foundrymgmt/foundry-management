@@ -1,6 +1,13 @@
 "use client";
 import { useEffect, useState } from "react";
-import { creators, reports, type DailyReport } from "@creatoros/domain";
+import {
+  HEALTH_BANDS,
+  WORK_DEPARTMENTS,
+  WORK_PRIORITIES,
+  creators,
+  reports,
+  type DailyReport,
+} from "@creatoros/domain";
 import { Check, ListChecks } from "lucide-react";
 import { z } from "zod";
 import { DemoStrip, PageHeader } from "@/components/page-header";
@@ -25,10 +32,24 @@ export default function ReportsPage() {
     void fetch("/api/reports/daily")
       .then((response) => response.json())
       .then((body: unknown) => {
-        const parsed = liveReportsResponse.safeParse(body);
-        if (!parsed.success) return;
+        const envelope = z.object({ data: z.array(z.unknown()) }).safeParse(body);
+        if (!envelope.success) return;
+        // Parsed one report at a time rather than as a single z.array(...): a
+        // report the client schema can't yet represent -- an added enum value,
+        // a shape change -- used to fail the whole array's parse and blank
+        // the entire org's report inbox for every creator, not just the one
+        // report that didn't fit. One bad report is now dropped and logged,
+        // not a reason to hide everyone else's.
+        const parsedReports = envelope.data.data.flatMap((raw) => {
+          const result = liveReportSchema.safeParse(raw);
+          if (!result.success) {
+            console.warn("Skipping a daily report the client could not parse", result.error);
+            return [];
+          }
+          return [result.data];
+        });
         setReportRecords(
-          parsed.data.data.map((report) => ({
+          parsedReports.map((report) => ({
             id: report.id,
             creatorId: report.creator_id,
             creatorName: report.creators?.stage_name ?? "Creator",
@@ -38,15 +59,7 @@ export default function ReportsPage() {
             summary: report.summary,
             primaryBottleneck: report.primary_bottleneck ?? "No primary bottleneck",
             priority: report.priority ?? "NORMAL",
-            metrics: {
-              date: report.report_date,
-              reach: 0,
-              profileVisits: 0,
-              outboundClicks: 0,
-              newSubscribers: 0,
-              firstBuyers: 0,
-              revenue: 0,
-            },
+            metrics: report.metrics_json,
             comparisons: {},
             anomalies: report.anomalies_json,
             recommendations: report.recommendations_json.map((item, index) => ({
@@ -58,9 +71,9 @@ export default function ReportsPage() {
               suggestedOwner: "Assigned team",
               dueInDays: 3,
               confidence: "MEASURED" as const,
-              sourceRule: "DATABASE",
+              sourceRule: report.data_quality_json?.ruleId ?? "UNKNOWN",
             })),
-            ruleId: "DATABASE",
+            ruleId: report.data_quality_json?.ruleId ?? "UNKNOWN",
             provider: "RULES" as const,
           })),
         );
@@ -180,36 +193,45 @@ export default function ReportsPage() {
   );
 }
 
-const liveReportsResponse = z.object({
-  data: z.array(
+const liveReportSchema = z.object({
+  id: z.string().uuid(),
+  creator_id: z.string().uuid(),
+  creators: z.object({ stage_name: z.string() }).nullable().optional(),
+  report_date: z.string(),
+  // Every band in the canonical list, including UNKNOWN -- the value
+  // healthBand() (packages/domain/src/health-score.ts) returns for a
+  // creator with no measured score yet. Missing it here meant a single
+  // freshly onboarded creator's report -- the state every new creator
+  // starts in -- failed this report's parse and, before parsing moved to
+  // one report at a time, blanked the whole org's inbox for it.
+  health_status: z.enum(HEALTH_BANDS).nullable(),
+  summary: z.string(),
+  primary_bottleneck: z.string().nullable(),
+  priority: z.enum(["CRITICAL", "HIGH", "NORMAL"]).nullable(),
+  anomalies_json: z.array(
+    z.object({ severity: z.enum(["CRITICAL", "WARNING", "OPPORTUNITY"]), message: z.string() }),
+  ),
+  recommendations_json: z.array(
     z.object({
-      id: z.string().uuid(),
-      creator_id: z.string().uuid(),
-      creators: z.object({ stage_name: z.string() }).nullable().optional(),
-      report_date: z.string(),
-      health_status: z.enum(["WATCH", "GREEN", "AT_RISK", "CRITICAL"]).nullable(),
-      summary: z.string(),
-      primary_bottleneck: z.string().nullable(),
-      priority: z.enum(["CRITICAL", "HIGH", "NORMAL"]).nullable(),
-      anomalies_json: z.array(
-        z.object({ severity: z.enum(["CRITICAL", "WARNING", "OPPORTUNITY"]), message: z.string() }),
-      ),
-      recommendations_json: z.array(
-        z.object({
-          id: z.string().optional(),
-          department: z.enum([
-            "Growth",
-            "Creative",
-            "Creator Success",
-            "Revenue",
-            "Operations",
-            "Security",
-            "Compliance",
-          ]),
-          priority: z.enum(["CRITICAL", "HIGH", "MEDIUM", "LOW"]),
-          action: z.string(),
-        }),
-      ),
+      id: z.string().optional(),
+      department: z.enum(WORK_DEPARTMENTS),
+      priority: z.enum(WORK_PRIORITIES),
+      action: z.string(),
     }),
   ),
+  // The real per-report metrics and the rule that produced the report
+  // (apps/web/src/lib/daily-report.ts writes both into the row -- metrics
+  // under metrics_json, the rule id under data_quality_json.ruleId). The API
+  // route already selects both; only this page was ignoring them in favor of
+  // an all-zero metrics object and the literal string "DATABASE".
+  metrics_json: z.object({
+    date: z.string(),
+    reach: z.coerce.number(),
+    profileVisits: z.coerce.number(),
+    outboundClicks: z.coerce.number(),
+    newSubscribers: z.coerce.number(),
+    firstBuyers: z.coerce.number(),
+    revenue: z.coerce.number(),
+  }),
+  data_quality_json: z.object({ ruleId: z.string().optional() }).nullable().optional(),
 });

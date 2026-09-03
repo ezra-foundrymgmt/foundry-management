@@ -247,6 +247,36 @@ describe("CREATOR_ACTIVATION_V1", () => {
     expect(blocked.steps.every((step) => step.status === "PENDING")).toBe(true);
   });
 
+  it("re-evaluates a BLOCKED run's prerequisites on the next start instead of freezing it forever", async () => {
+    // Regression: #createRunLocked returned an existing BLOCKED run unchanged,
+    // so a creator blocked once could never activate even after the missing
+    // prerequisite was fixed -- the one-active-run-per-creator constraint made
+    // a fresh run impossible, and nothing re-checked whether blockers still
+    // held. Hit live this session; required a manual SQL fix to unstick.
+    const { service } = setup();
+    const blocked = await service.start({
+      ...madison,
+      id: "blocked-then-fixed",
+      contractSigned: false,
+      contactEmail: null,
+    });
+    expect(blocked.status).toBe("BLOCKED");
+    expect(blocked.blockers).toEqual([
+      "Signed contract required",
+      "Creator contact email required",
+    ]);
+
+    const resumed = await service.start({
+      ...madison,
+      id: "blocked-then-fixed",
+      contractSigned: true,
+      contactEmail: "blocked-then-fixed@example.test",
+    });
+    expect(resumed.id).toBe(blocked.id);
+    expect(resumed.status).toBe("WAITING_EXTERNAL");
+    expect(resumed.blockers).toEqual([]);
+  });
+
   it("resumes after a provider failure without repeating completed provisioning", async () => {
     class CountingSlackProvider extends MockSlackProvider {
       attempts = 0;

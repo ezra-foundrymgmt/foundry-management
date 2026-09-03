@@ -1,8 +1,7 @@
 # Inngest setup
 
 Inngest runs CreatorOS's durable background work. Status: the client, the serve
-endpoint and three functions exist and are registered; **nothing has ever been
-executed against Inngest Cloud.**
+endpoint and four functions exist and are registered.
 
 ## Endpoint
 
@@ -20,7 +19,15 @@ authenticates with a signing key, not a session cookie.
 | ------------------------------- | ----------------------------------------------------------- | ------- |
 | `creator-activation-v1`         | `creator.activation.requested`, `creator.activation.resume` | 4       |
 | `creator-daily-report-generate` | `creator.daily-report.requested`                            | 3       |
+| `creator-report-scheduler`      | cron `0 * * * *` (hourly)                                   | 2       |
 | `foundry-agent-slack-respond`   | `slack.agent.requested`                                     | 2       |
+
+`creator-report-scheduler` has no trigger event because nothing requests it —
+it is the one process that decides a report is due, reading each creator's
+report schedule against their own timezone and firing
+`creator.daily-report.requested` for the ones due this hour.
+`concurrency: { limit: 1 }` keeps only one pass running across the whole
+deployment, so a slow pass and its next hourly firing cannot double up.
 
 ## Environment variables
 
@@ -37,7 +44,7 @@ Both are required in live mode; `validate-env.mjs` fails the build without them.
 1. Deploy first — Inngest must be able to reach the endpoint.
 2. Inngest dashboard → **Apps → Sync new app** → paste
    `https://<your-domain>/api/inngest`.
-3. Confirm all three functions appear.
+3. Confirm all four functions appear.
 
 Re-sync after any deploy that adds or renames a function.
 
@@ -81,7 +88,7 @@ so a run could never be resumed twice.
 ## Verify
 
 1. `GET /api/inngest` returns the introspection payload.
-2. All three functions listed in the dashboard.
+2. All four functions listed in the dashboard.
 3. `POST /api/onboarding` with a real creator id returns `202 QUEUED` with an
    event id, and a run appears in Inngest.
 4. Interrupt or redeploy mid-run, then `POST /api/workflows/resume`; the run
