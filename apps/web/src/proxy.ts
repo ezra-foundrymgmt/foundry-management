@@ -1,13 +1,39 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
+/**
+ * Whether this process is a developer's machine running mock mode.
+ *
+ * Deliberately not `(MODE ?? "mock") === "mock"`. That default meant "skip
+ * authentication" — so if the variable failed to reach the middleware runtime,
+ * which resolves its environment separately from the page and route functions,
+ * every route would be served with no session check. The failure mode of an
+ * absent variable has to be "enforce", not "skip".
+ *
+ * The zod contract is not imported here on purpose: the edge runtime should not
+ * depend on a module that throws during parsing. The three conditions below are
+ * the same ones isDeployedEnvironment() applies.
+ */
+export function isDeveloperMockMode(): boolean {
+  if (process.env["VERCEL_ENV"]) return false;
+  if ((process.env["APP_ENV"] ?? "development") !== "development") return false;
+  return process.env["CREATOROS_INTEGRATION_MODE"] === "mock";
+}
+
 export async function proxy(request: NextRequest) {
-  if ((process.env["CREATOROS_INTEGRATION_MODE"] ?? "mock") === "mock") return NextResponse.next();
+  if (isDeveloperMockMode()) return NextResponse.next();
   let response = NextResponse.next({ request });
+  const isLogin = request.nextUrl.pathname === "/login";
+  const isAuthCallback = request.nextUrl.pathname === "/auth/callback";
   const url = process.env["NEXT_PUBLIC_SUPABASE_URL"];
   const key = process.env["NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"];
-  if (!url || !key)
+  if (!url || !key) {
+    // /login is where this redirect points, so redirecting it again is an
+    // infinite loop and the operator never sees the reason. They get the page
+    // and its error banner instead.
+    if (isLogin) return response;
     return NextResponse.redirect(new URL("/login?error=not-configured", request.url));
+  }
   const supabase = createServerClient(url, key, {
     cookies: {
       getAll: () => request.cookies.getAll(),
@@ -19,8 +45,6 @@ export async function proxy(request: NextRequest) {
     },
   });
   const { data } = await supabase.auth.getUser();
-  const isLogin = request.nextUrl.pathname === "/login";
-  const isAuthCallback = request.nextUrl.pathname === "/auth/callback";
   if (!data.user && !isLogin && !isAuthCallback)
     return NextResponse.redirect(new URL("/login", request.url));
   if (data.user && isLogin) return NextResponse.redirect(new URL("/", request.url));

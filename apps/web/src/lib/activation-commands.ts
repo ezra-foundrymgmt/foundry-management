@@ -1,6 +1,10 @@
 import "server-only";
 import { z } from "zod";
 import type { AppSession } from "@/lib/auth";
+
+/** Who is asking and on whose behalf. Narrow so the Foundry agent, which runs
+ * without the caller's email, can call exactly these. */
+type Actor = Pick<AppSession, "userId" | "organizationId">;
 import { isMockMode } from "@/lib/environment";
 import { inngest } from "@/lib/inngest";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -41,7 +45,7 @@ function admin() {
  * does not queue a second activation.
  */
 export async function startCreatorActivation(
-  session: AppSession,
+  session: Actor,
   input: { creatorId: string; correlationId?: string },
 ): Promise<ActivationQueued> {
   if (isMockMode()) throw new Error("ACTIVATION_REQUIRES_LIVE_MODE");
@@ -89,7 +93,7 @@ export async function startCreatorActivation(
  * run per creator, and provisioned_resources is keyed per resource.
  */
 export async function resumeCreatorActivation(
-  session: AppSession,
+  session: Actor,
   input: { creatorId: string; correlationId: string },
 ): Promise<ResumeQueued> {
   if (isMockMode()) throw new Error("RESUME_REQUIRES_LIVE_MODE");

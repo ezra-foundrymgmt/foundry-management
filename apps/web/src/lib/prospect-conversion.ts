@@ -1,5 +1,6 @@
 import "server-only";
 import { z } from "zod";
+import { isMockMode } from "@/lib/environment";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 const mockConversions = new Map<string, string>();
@@ -9,7 +10,10 @@ export async function convertProspect(input: {
   organizationId: string;
   actorUserId: string;
 }) {
-  if ((process.env["CREATOROS_INTEGRATION_MODE"] ?? "mock") === "mock") {
+  // Through the contract, not a raw read. The raw read defaulted to mock, and
+  // the mock branch answers with a creator that was never written — a fabricated
+  // 200 in any deployed environment where the variable did not arrive.
+  if (isMockMode()) {
     if (input.prospectId !== "jessica") throw new ConversionError("PROSPECT_NOT_FOUND", 404);
     const existing = mockConversions.get(input.prospectId);
     if (existing) return { creatorId: existing, created: false, mode: "MOCK" as const };

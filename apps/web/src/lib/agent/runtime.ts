@@ -1,10 +1,14 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
-import type { AppSession } from "@/lib/auth";
 import { getEnvironment } from "@/lib/environment";
 import { logEvent } from "@/lib/observability";
 import { buildSystemPrompt, type PromptSurface } from "@/lib/agent/prompt";
-import { AGENT_TOOLS, executeAgentTool, type AgentToolContext } from "@/lib/agent/tools";
+import {
+  AGENT_TOOLS,
+  executeAgentTool,
+  type AgentIdentity,
+  type AgentToolContext,
+} from "@/lib/agent/tools";
 
 /** Slack replies are read on a phone; long answers are a bug, not a feature. */
 const MAX_TOKENS = 4096;
@@ -39,7 +43,7 @@ function toolDefinitions(): Anthropic.Tool[] {
 }
 
 export async function runFoundryAgent(input: {
-  session: AppSession;
+  session: AgentIdentity;
   prompt: string;
   correlationId: string;
   surface: PromptSurface;

@@ -1,10 +1,20 @@
 import { spawn, spawnSync } from "node:child_process";
 import process from "node:process";
 
+// Stated, not inherited. The suite used to rely on an absent
+// CREATOROS_INTEGRATION_MODE defaulting to mock, which is the same default that
+// let the auth proxy skip authentication when the variable failed to arrive.
+const environment = {
+  ...process.env,
+  APP_ENV: "development",
+  CREATOROS_INTEGRATION_MODE: "mock",
+};
+
 const server = spawn(process.execPath, ["node_modules/next/dist/bin/next", "dev", "--webpack"], {
   cwd: process.cwd(),
   stdio: "ignore",
   windowsHide: true,
+  env: environment,
 });
 
 async function waitForServer() {
@@ -38,6 +48,7 @@ try {
   await waitForServer();
   exitCode = await new Promise((resolve) => {
     const runner = spawn(process.execPath, ["node_modules/@playwright/test/cli.js", "test"], {
+      env: environment,
       cwd: process.cwd(),
       stdio: "inherit",
       env: { ...process.env, PLAYWRIGHT_EXTERNAL_SERVER: "1" },

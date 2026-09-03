@@ -77,11 +77,15 @@ export const respondToSlackMention = inngest.createFunction(
       const parsedUser = userSchema.safeParse(user.data);
       if (!parsedMembership.success || !parsedMembership.data.active || !parsedUser.success)
         return null;
+      // The email is looked up here to prove the account exists, then dropped.
+      // A step's return value is persisted in Inngest Cloud run state, so
+      // returning it would copy a Foundry employee's address out of the database
+      // into a third-party workflow store on every @-mention. Same reasoning as
+      // the bot token below; it is re-read where it is actually used.
       return {
         userId: identity.userId,
         organizationId: input.organizationId,
         role: parsedMembership.data.role as Role,
-        email: parsedUser.data.email,
       };
     });
 

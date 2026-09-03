@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { config } from "./proxy";
+import { afterEach, describe, expect, it } from "vitest";
+import { config, isDeveloperMockMode } from "./proxy";
 
 /**
  * The matcher decides which requests are authenticated. A mistake here ships an
@@ -56,5 +56,45 @@ describe("auth proxy matcher", () => {
       "/icons-internal/secret",
     ])
       expect(proxyRuns(path), `${path} must be authenticated`).toBe(true);
+  });
+});
+
+/**
+ * Adversarial review: the gate read CREATOROS_INTEGRATION_MODE raw and defaulted
+ * to "mock", which means "skip authentication". The middleware runtime resolves
+ * its environment separately from the page and route functions, so a variable
+ * that failed to arrive would have served every route with no session check.
+ * An absent variable must mean enforce.
+ */
+describe("mock-mode detection", () => {
+  const saved = { ...process.env };
+
+  function withEnv(values: Record<string, string | undefined>) {
+    for (const key of ["CREATOROS_INTEGRATION_MODE", "APP_ENV", "VERCEL_ENV"])
+      delete process.env[key];
+    for (const [key, value] of Object.entries(values))
+      if (value !== undefined) process.env[key] = value;
+    return isDeveloperMockMode();
+  }
+
+  afterEach(() => {
+    process.env = { ...saved };
+  });
+
+  it("enforces authentication when the mode variable is absent", () => {
+    expect(withEnv({})).toBe(false);
+  });
+
+  it("enforces authentication in any deployed environment, whatever the mode says", () => {
+    expect(withEnv({ CREATOROS_INTEGRATION_MODE: "mock", VERCEL_ENV: "preview" })).toBe(false);
+    expect(withEnv({ CREATOROS_INTEGRATION_MODE: "mock", VERCEL_ENV: "production" })).toBe(false);
+    expect(withEnv({ CREATOROS_INTEGRATION_MODE: "mock", APP_ENV: "staging" })).toBe(false);
+    expect(withEnv({ CREATOROS_INTEGRATION_MODE: "mock", APP_ENV: "production" })).toBe(false);
+  });
+
+  it("skips authentication only on a developer machine that asked for mock mode", () => {
+    expect(withEnv({ CREATOROS_INTEGRATION_MODE: "mock" })).toBe(true);
+    expect(withEnv({ CREATOROS_INTEGRATION_MODE: "mock", APP_ENV: "development" })).toBe(true);
+    expect(withEnv({ CREATOROS_INTEGRATION_MODE: "live" })).toBe(false);
   });
 });
