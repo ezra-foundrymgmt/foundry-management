@@ -31,7 +31,9 @@ describe("agent tool surface", () => {
       "get_creator_summary",
       "get_creator_tasks",
       "get_portfolio_alerts",
+      "retry_workflow",
       "search_creator",
+      "start_creator_activation",
     ]);
     // No arbitrary SQL, HTTP, shell, or credential access is reachable by the model.
     for (const forbidden of ["run_sql", "query", "http_request", "fetch", "get_secret", "execute"])
@@ -142,5 +144,64 @@ describe("agent tool authorization", () => {
     await expect(
       executeAgentTool(contextFor("analyst"), "get_creator_summary", { creatorId: CREATOR_ID }),
     ).rejects.toThrow("DATABASE_NOT_CONFIGURED");
+  });
+});
+
+/**
+ * The workflow tools are the only ones that make CreatorOS act on the outside
+ * world on the model's say-so. Everything below is the gate they pass through
+ * before that happens; none of it depends on how the model was prompted.
+ */
+describe("workflow tools", () => {
+  const WORKFLOW_TOOLS = ["start_creator_activation", "retry_workflow"];
+
+  it("classifies both as workflow risk and internal only", () => {
+    for (const name of WORKFLOW_TOOLS) {
+      const tool = findTool(name);
+      expect(tool?.risk).toBe("WORKFLOW");
+      // Activation state is Foundry's operating business, not the creator's.
+      expect(tool?.internalOnly).toBe(true);
+    }
+  });
+
+  it("denies activation to a role without workflow.start", async () => {
+    expect(
+      await executeAgentTool(contextFor("growth"), "start_creator_activation", {
+        creatorId: CREATOR_ID,
+      }),
+    ).toEqual({ ok: false, error: "PERMISSION_DENIED", permission: "workflow.start" });
+  });
+
+  it("denies resume to a role without workflow.retry", async () => {
+    expect(
+      await executeAgentTool(contextFor("analyst"), "retry_workflow", { creatorId: CREATOR_ID }),
+    ).toEqual({ ok: false, error: "PERMISSION_DENIED", permission: "workflow.retry" });
+  });
+
+  it("refuses to run either from a creator-facing channel", async () => {
+    for (const name of WORKFLOW_TOOLS)
+      expect(
+        await executeAgentTool(contextFor("super_admin", true), name, { creatorId: CREATOR_ID }),
+      ).toEqual({ ok: false, error: "INTERNAL_ONLY_IN_CREATOR_CHANNEL" });
+  });
+
+  it("rejects a malformed creator id before reaching the workflow engine", async () => {
+    for (const name of WORKFLOW_TOOLS) {
+      const result = await executeAgentTool(contextFor("super_admin"), name, {
+        creatorId: "madison",
+      });
+      expect(result.ok).toBe(false);
+      expect(result.ok === false && result.error).toBe("INVALID_INPUT");
+    }
+  });
+
+  it("never claims a creator is activated, only that work was queued", () => {
+    // A model that reads "activated" in a tool description will report it that
+    // way in Slack, and the workflow can still block or park on a prerequisite.
+    for (const name of WORKFLOW_TOOLS) {
+      const description = findTool(name)?.description.toLowerCase() ?? "";
+      expect(description).toContain("queue");
+      expect(description).not.toContain("activates the creator");
+    }
   });
 });
