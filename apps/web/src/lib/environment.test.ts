@@ -70,7 +70,10 @@ describe("environment contract: mock mode may never be deployed", () => {
   });
 
   for (const deployment of [
-    { label: "a Vercel production deployment", env: { VERCEL_ENV: "production", APP_ENV: "production" } },
+    {
+      label: "a Vercel production deployment",
+      env: { VERCEL_ENV: "production", APP_ENV: "production" },
+    },
     { label: "a Vercel preview deployment", env: { VERCEL_ENV: "preview", APP_ENV: "staging" } },
     { label: "a staging APP_ENV with no Vercel marker", env: { APP_ENV: "staging" } },
     { label: "a production APP_ENV with no Vercel marker", env: { APP_ENV: "production" } },

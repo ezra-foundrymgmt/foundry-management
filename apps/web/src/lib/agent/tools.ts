@@ -428,7 +428,8 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   },
   {
     name: "acknowledge_alert",
-    description: "Acknowledge an open incident so the portfolio alert list reflects that a human has seen it.",
+    description:
+      "Acknowledge an open incident so the portfolio alert list reflects that a human has seen it.",
     permission: "task.complete",
     risk: "LOW_RISK_WRITE",
     internalOnly: true,
@@ -479,8 +480,7 @@ export async function executeAgentTool(
   if (tool.internalOnly && context.creatorFacingSurface)
     return { ok: false, error: "INTERNAL_ONLY_IN_CREATOR_CHANNEL" };
   const parsed = tool.inputSchema.safeParse(rawInput ?? {});
-  if (!parsed.success)
-    return { ok: false, error: "INVALID_INPUT", issues: parsed.error.flatten() };
+  if (!parsed.success) return { ok: false, error: "INVALID_INPUT", issues: parsed.error.flatten() };
   const data = await tool.execute(context, parsed.data as never);
   return { ok: true, data };
 }

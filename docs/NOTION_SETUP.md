@@ -68,10 +68,10 @@ than scatter hub pages into the workspace root.
 
 `LiveNotionProvider` creates two pages per creator:
 
-| Page | Audience |
-| --- | --- |
-| `<Stage name> · Creator Hub` | creator-readable |
-| `<Stage name> · Internal Operations` | Foundry only |
+| Page                                 | Audience         |
+| ------------------------------------ | ---------------- |
+| `<Stage name> · Creator Hub`         | creator-readable |
+| `<Stage name> · Internal Operations` | Foundry only     |
 
 Updates to the creator hub pass `assertProjectableFields()` in
 `packages/integrations/src/projection.ts`, which is an **allowlist**:
@@ -82,7 +82,7 @@ foundryDeliverables, contentRequests, approvals, approvedGrowthStrategy,
 performanceSummary, upcomingMeetings, resources
 ```
 
-A field that is not on that list is refused. A field on the list whose *value*
+A field that is not on that list is refused. A field on the list whose _value_
 mentions contribution margin, P&L, unit economics, commission rate, Foundry
 revenue, employee QA, founder notes, legal analysis, internal incidents, or
 anything credential-shaped is also refused.
@@ -104,7 +104,7 @@ exact title under the configured root, which covers the crash window between
 creating a page in Notion and persisting its id.
 
 **Residual gap, stated honestly:** Notion's search index is eventually
-consistent. If the process dies within the indexing window *and* retries within
+consistent. If the process dies within the indexing window _and_ retries within
 it, the reconcile can miss the orphaned page and create a second one. Notion
 offers no create-if-absent and no `name_taken` equivalent, so this window cannot
 be fully closed from the client. It is narrow and self-healing on a later retry.
@@ -122,10 +122,10 @@ If you see a duplicate hub, archive it in Notion; the stored id is authoritative
 
 ## Failure modes
 
-| Symptom | Cause |
-| --- | --- |
-| `NOTION_PARENT_PAGE_NOT_CONFIGURED` | Creator Hub root not set for that organization |
-| `NOTION_object_not_found` | Root page not shared with the integration |
-| `NOTION_unauthorized` | Token revoked or wrong workspace; reconnect |
-| `NOTION_PROJECTION_REFUSED` | Correct behaviour — restricted content was blocked |
-| Duplicate hub page | The search-index window above; archive the extra page |
+| Symptom                             | Cause                                                 |
+| ----------------------------------- | ----------------------------------------------------- |
+| `NOTION_PARENT_PAGE_NOT_CONFIGURED` | Creator Hub root not set for that organization        |
+| `NOTION_object_not_found`           | Root page not shared with the integration             |
+| `NOTION_unauthorized`               | Token revoked or wrong workspace; reconnect           |
+| `NOTION_PROJECTION_REFUSED`         | Correct behaviour — restricted content was blocked    |
+| Duplicate hub page                  | The search-index window above; archive the extra page |

@@ -50,8 +50,7 @@ export async function POST(request: Request) {
       .limit(1)
       .maybeSingle();
     if (run.error) throw new Error(run.error.message);
-    if (!run.data)
-      return NextResponse.json({ error: "NO_RESUMABLE_RUN" }, { status: 404 });
+    if (!run.data) return NextResponse.json({ error: "NO_RESUMABLE_RUN" }, { status: 404 });
 
     const resumable = z.object({ id: z.string().uuid(), status: z.string() }).parse(run.data);
     const result = await inngest.send({

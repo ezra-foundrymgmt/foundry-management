@@ -6,6 +6,10 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     env:
+      # CI is a developer machine, not a deployment: mock mode is allowed here
+      # and only here. APP_ENV must stay development or the environment contract
+      # refuses to build, which is the guard working as intended.
+      APP_ENV: development
       CREATOROS_INTEGRATION_MODE: mock
       NEXT_PUBLIC_CREATOROS_DEMO_MODE: "true"
     steps:
@@ -23,3 +27,15 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+      # Playwright browsers are not part of the dependency install, so without
+      # this step every browser-driven test fails on a clean checkout.
+      - name: Install Playwright browsers
+        run: pnpm --filter @creatoros/web exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report
+          retention-days: 7

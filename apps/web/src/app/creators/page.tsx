@@ -73,7 +73,9 @@ export default async function CreatorsPage() {
                   <td>
                     <StatusBadge value={creator.status} />
                   </td>
-                  <td title={creator.monthlyRevenue === null ? "No revenue data imported" : undefined}>
+                  <td
+                    title={creator.monthlyRevenue === null ? "No revenue data imported" : undefined}
+                  >
                     {formatMoney(creator.monthlyRevenue)}
                   </td>
                   <td

@@ -20,8 +20,7 @@ export type SlackVerificationFailure =
   | "SIGNATURE_MISMATCH";
 
 export type SlackVerificationResult =
-  | { valid: true }
-  | { valid: false; reason: SlackVerificationFailure };
+  { valid: true } | { valid: false; reason: SlackVerificationFailure };
 
 export function signSlackRequest(input: {
   signingSecret: string;

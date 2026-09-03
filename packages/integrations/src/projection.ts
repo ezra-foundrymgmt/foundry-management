@@ -77,8 +77,7 @@ export function assertProjectableFields(
     if (typeof value !== "string")
       throw new ProjectionBoundaryError(field, `expected a string, received ${typeof value}`);
     const restricted = RESTRICTED_VALUE_PATTERNS.find((entry) => entry.pattern.test(value));
-    if (restricted)
-      throw new ProjectionBoundaryError(field, `value mentions ${restricted.label}`);
+    if (restricted) throw new ProjectionBoundaryError(field, `value mentions ${restricted.label}`);
     safe[field] = value;
   }
   return safe as Record<ProjectableCreatorField, string>;

@@ -117,7 +117,9 @@ describe("Drill F — organization B asks the agent about an organization A crea
       ).rejects.toThrow("CREATOR_NOT_FOUND");
       // Every query issued before the refusal was org-scoped.
       for (const query of recorded.filter((entry) => entry.table === "creators")) {
-        const filter = query.filters.find(([op, column]) => op === "eq" && column === "organization_id");
+        const filter = query.filters.find(
+          ([op, column]) => op === "eq" && column === "organization_id",
+        );
         expect(filter?.[2]).toBe(ORG_B);
       }
     });

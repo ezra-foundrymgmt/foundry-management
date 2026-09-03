@@ -12,7 +12,7 @@ localhost install points at a dev server that will not be running.
 Against a local dev server, with a real browser:
 
 - `/manifest.webmanifest` serves a valid manifest — name `CreatorOS — Foundry
-  Management`, short name `CreatorOS`, `display: standalone`, `start_url: /`,
+Management`, short name `CreatorOS`, `display: standalone`, `start_url: /`,
   `scope: /`, theme `#1c1d1b`, background `#f3f0e9`, three icons.
 - `/icons/192` and `/icons/512` both return real `image/png` responses.
 - The service worker registers, activates, and creates its cache.
@@ -62,10 +62,10 @@ install; it changes nothing in CreatorOS.
 
 ## Troubleshooting
 
-| Symptom | Cause and fix |
-| --- | --- |
-| No install icon | Not on HTTPS, or the manifest failed to load. Open DevTools → Application → Manifest. |
-| Install icon on localhost but not production | Production build or deploy failed; check the Vercel deployment log. |
+| Symptom                                          | Cause and fix                                                                                             |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| No install icon                                  | Not on HTTPS, or the manifest failed to load. Open DevTools → Application → Manifest.                     |
+| Install icon on localhost but not production     | Production build or deploy failed; check the Vercel deployment log.                                       |
 | Opens in a browser tab instead of its own window | Installed as a shortcut rather than an app. Uninstall and reinstall with **Install this site as an app**. |
-| Signed out on every launch | Third-party cookie or site-data blocking for the domain. Allow site data for the CreatorOS domain. |
-| Blank window after launch | `start_url` unreachable — usually the deployment is down or the domain changed. |
+| Signed out on every launch                       | Third-party cookie or site-data blocking for the domain. Allow site data for the CreatorOS domain.        |
+| Blank window after launch                        | `start_url` unreachable — usually the deployment is down or the domain changed.                           |

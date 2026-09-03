@@ -47,7 +47,9 @@ if (mode === "live") {
   ];
   for (const key of required) if (!read(key)) errors.push(`${key} is required in live mode.`);
   if (!read("SUPABASE_SECRET_KEY") && !read("SUPABASE_SERVICE_ROLE_KEY"))
-    errors.push("SUPABASE_SECRET_KEY or legacy SUPABASE_SERVICE_ROLE_KEY is required in live mode.");
+    errors.push(
+      "SUPABASE_SECRET_KEY or legacy SUPABASE_SERVICE_ROLE_KEY is required in live mode.",
+    );
   if ((read("NEXT_PUBLIC_APP_URL") ?? "").includes("localhost"))
     errors.push("NEXT_PUBLIC_APP_URL cannot be localhost in live mode.");
 }

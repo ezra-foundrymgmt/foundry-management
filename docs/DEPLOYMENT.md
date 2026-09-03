@@ -36,12 +36,12 @@ build breaks — the workspace packages live above it.
 
 ## Environments
 
-| | Local | Preview | Production |
-| --- | --- | --- | --- |
-| `APP_ENV` | `development` | `staging` | `production` |
-| `VERCEL_ENV` | unset | `preview` | `production` |
-| `CREATOROS_INTEGRATION_MODE` | `mock` | **`live`** | **`live`** |
-| Supabase | local or staging | **staging** | production |
+|                              | Local            | Preview     | Production   |
+| ---------------------------- | ---------------- | ----------- | ------------ |
+| `APP_ENV`                    | `development`    | `staging`   | `production` |
+| `VERCEL_ENV`                 | unset            | `preview`   | `production` |
+| `CREATOROS_INTEGRATION_MODE` | `mock`           | **`live`**  | **`live`**   |
+| Supabase                     | local or staging | **staging** | production   |
 
 **Mock mode cannot be deployed.** It fabricates a super_admin session and
 short-circuits the auth proxy, so `validate-env.mjs` fails the build and
@@ -66,29 +66,29 @@ values.
 
 **Required in every deployed environment**
 
-| Variable | Notes |
-| --- | --- |
-| `APP_ENV` | per the table above |
-| `CREATOROS_INTEGRATION_MODE` | `live` |
-| `NEXT_PUBLIC_APP_URL` | full https origin; may not contain `localhost` |
-| `NEXT_PUBLIC_SUPABASE_URL` | project URL |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | publishable key — browser-safe |
-| `SUPABASE_SECRET_KEY` | server only. Legacy `SUPABASE_SERVICE_ROLE_KEY` is accepted |
-| `INNGEST_EVENT_KEY` | |
-| `INNGEST_SIGNING_KEY` | |
-| `INTEGRATION_ENCRYPTION_KEY` | 32-byte base64; encrypts provider tokens at rest |
-| `PRODUCTION_SUPABASE_PROJECT_REF` | production project ref, in every environment |
+| Variable                               | Notes                                                       |
+| -------------------------------------- | ----------------------------------------------------------- |
+| `APP_ENV`                              | per the table above                                         |
+| `CREATOROS_INTEGRATION_MODE`           | `live`                                                      |
+| `NEXT_PUBLIC_APP_URL`                  | full https origin; may not contain `localhost`              |
+| `NEXT_PUBLIC_SUPABASE_URL`             | project URL                                                 |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | publishable key — browser-safe                              |
+| `SUPABASE_SECRET_KEY`                  | server only. Legacy `SUPABASE_SERVICE_ROLE_KEY` is accepted |
+| `INNGEST_EVENT_KEY`                    |                                                             |
+| `INNGEST_SIGNING_KEY`                  |                                                             |
+| `INTEGRATION_ENCRYPTION_KEY`           | 32-byte base64; encrypts provider tokens at rest            |
+| `PRODUCTION_SUPABASE_PROJECT_REF`      | production project ref, in every environment                |
 
 **Optional — features stay off without them**
 
-| Variable | Enables |
-| --- | --- |
-| `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` / `SLACK_REDIRECT_URI` | Slack install |
-| `SLACK_SIGNING_SECRET` | Slack events and the agent |
-| `NOTION_CLIENT_ID` / `NOTION_CLIENT_SECRET` / `NOTION_REDIRECT_URI` | Notion OAuth |
-| `ANTHROPIC_API_KEY` | the Foundry agent |
-| `FOUNDRY_AGENT_MODEL` | defaults to `claude-opus-5` |
-| `SENTRY_DSN` | error reporting, when wired |
+| Variable                                                            | Enables                     |
+| ------------------------------------------------------------------- | --------------------------- |
+| `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` / `SLACK_REDIRECT_URI`    | Slack install               |
+| `SLACK_SIGNING_SECRET`                                              | Slack events and the agent  |
+| `NOTION_CLIENT_ID` / `NOTION_CLIENT_SECRET` / `NOTION_REDIRECT_URI` | Notion OAuth                |
+| `ANTHROPIC_API_KEY`                                                 | the Foundry agent           |
+| `FOUNDRY_AGENT_MODEL`                                               | defaults to `claude-opus-5` |
+| `SENTRY_DSN`                                                        | error reporting, when wired |
 
 Generate the encryption key with:
 
@@ -114,7 +114,7 @@ Next builds rather than deploying something unsafe.
 
 1. `GET /api/health` → 200.
 2. `/login` renders; an unauthenticated request to `/` redirects there.
-   *(If it does not, `CREATOROS_INTEGRATION_MODE` is not `live`.)*
+   _(If it does not, `CREATOROS_INTEGRATION_MODE` is not `live`.)_
 3. Sign in as Ezra; the avatar menu shows the real email and role.
 4. `/manifest.webmanifest` and `/icons/512` return 200.
 5. Install the PWA (`docs/PWA_INSTALL.md`).

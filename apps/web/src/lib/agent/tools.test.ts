@@ -54,10 +54,12 @@ describe("agent tool surface", () => {
 
 describe("agent tool authorization", () => {
   it("refuses a tool name the model invented", async () => {
-    expect(await executeAgentTool(contextFor("super_admin"), "run_sql", { q: "select 1" })).toEqual({
-      ok: false,
-      error: "UNKNOWN_TOOL",
-    });
+    expect(await executeAgentTool(contextFor("super_admin"), "run_sql", { q: "select 1" })).toEqual(
+      {
+        ok: false,
+        error: "UNKNOWN_TOOL",
+      },
+    );
   });
 
   it("denies a write tool to a read-only role", async () => {

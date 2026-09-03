@@ -37,24 +37,24 @@ that, so answering inline would produce timeouts and duplicate replies.
 
 Read-only tools, each gated on a CreatorOS permission:
 
-| Tool | Permission | Internal only |
-| --- | --- | --- |
-| `search_creator` | `creator.read` | no |
-| `get_creator_summary` | `creator.read` | no |
-| `get_creator_tasks` | `creator.read` | no |
-| `get_creator_metrics` | `analytics.read` | no |
-| `get_creator_reports` | `analytics.read` | no |
-| `get_creator_experiments` | `analytics.read` | no |
-| `get_creator_integrations` | `integration.read` | **yes** |
-| `get_portfolio_alerts` | `creator.read` | **yes** |
+| Tool                       | Permission         | Internal only |
+| -------------------------- | ------------------ | ------------- |
+| `search_creator`           | `creator.read`     | no            |
+| `get_creator_summary`      | `creator.read`     | no            |
+| `get_creator_tasks`        | `creator.read`     | no            |
+| `get_creator_metrics`      | `analytics.read`   | no            |
+| `get_creator_reports`      | `analytics.read`   | no            |
+| `get_creator_experiments`  | `analytics.read`   | no            |
+| `get_creator_integrations` | `integration.read` | **yes**       |
+| `get_portfolio_alerts`     | `creator.read`     | **yes**       |
 
 Low-risk writes:
 
-| Tool | Permission | Internal only |
-| --- | --- | --- |
-| `create_internal_task` | `task.create` | **yes** |
-| `create_content_request` | `task.create` | no |
-| `acknowledge_alert` | `task.complete` | **yes** |
+| Tool                     | Permission      | Internal only |
+| ------------------------ | --------------- | ------------- |
+| `create_internal_task`   | `task.create`   | **yes**       |
+| `create_content_request` | `task.create`   | no            |
+| `acknowledge_alert`      | `task.complete` | **yes**       |
 
 So it can answer, for a creator the asker is allowed to see: what their status
 and health are, what is open against them, what the recent daily reports said,

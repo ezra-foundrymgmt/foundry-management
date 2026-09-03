@@ -72,7 +72,10 @@ export function shouldProcessEvent(
 
 /** Strips the leading `<@U123>` mention so the model sees the actual question. */
 export function stripMention(text: string): string {
-  return text.replace(/<@[A-Z0-9]+>/g, " ").replace(/\s+/g, " ").trim();
+  return text
+    .replace(/<@[A-Z0-9]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 const connectionSchema = z.object({

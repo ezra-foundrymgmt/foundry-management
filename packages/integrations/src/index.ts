@@ -112,7 +112,10 @@ export class LiveSlackProvider implements SlackProvider {
     // The creator discriminator matters: two creators sharing a stage name would
     // otherwise generate the same channel name, and the name_taken reconcile
     // below would bind the second creator to the first creator's channel.
-    const discriminator = input.creatorId.replace(/[^a-zA-Z0-9]/g, "").slice(-6).toLowerCase();
+    const discriminator = input.creatorId
+      .replace(/[^a-zA-Z0-9]/g, "")
+      .slice(-6)
+      .toLowerCase();
     const name = normalizeSlackChannel(
       `${input.audience === "creator" ? "creator" : "internal"}-${input.stageSlug}-${discriminator}`,
     );

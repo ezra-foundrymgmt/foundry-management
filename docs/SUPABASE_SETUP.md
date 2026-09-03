@@ -8,11 +8,11 @@ migration chain has never been executed. Everything below is a human action.
 
 Three clients, deliberately separate:
 
-| Client | File | Key | Bypasses RLS |
-| --- | --- | --- | --- |
-| Browser | `lib/supabase/client.ts` | publishable | no |
-| Authenticated server | `lib/supabase/server.ts` | publishable + session cookies | no |
-| Privileged server | `lib/supabase/admin.ts` | secret | **yes** |
+| Client               | File                     | Key                           | Bypasses RLS |
+| -------------------- | ------------------------ | ----------------------------- | ------------ |
+| Browser              | `lib/supabase/client.ts` | publishable                   | no           |
+| Authenticated server | `lib/supabase/server.ts` | publishable + session cookies | no           |
+| Privileged server    | `lib/supabase/admin.ts`  | secret                        | **yes**      |
 
 `server.ts` and `admin.ts` both start with `import "server-only"`, which makes a
 build fail rather than ship if either is ever pulled into a client bundle.
@@ -26,15 +26,15 @@ organization ownership first.** RLS still tenant-scopes reads.
 
 Supabase → Project Settings → API.
 
-| Variable | Which key |
-| --- | --- |
-| `NEXT_PUBLIC_SUPABASE_URL` | Project URL |
+| Variable                               | Which key                  |
+| -------------------------------------- | -------------------------- |
+| `NEXT_PUBLIC_SUPABASE_URL`             | Project URL                |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Publishable (browser-safe) |
-| `SUPABASE_SECRET_KEY` | Secret — **server only** |
+| `SUPABASE_SECRET_KEY`                  | Secret — **server only**   |
 
 Older projects may only offer `anon` / `service_role`. Put the service_role key
 in `SUPABASE_SERVICE_ROLE_KEY`; both names are accepted and the modern one wins.
-There is no legacy fallback for the *publishable* side — if your project predates
+There is no legacy fallback for the _publishable_ side — if your project predates
 publishable keys, put the anon key in `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`.
 
 Never put the secret key in a `NEXT_PUBLIC_*` variable.
@@ -60,15 +60,15 @@ npx supabase db push
 
 Seven migrations, in order:
 
-| Migration | Contents |
-| --- | --- |
-| `..0001_creatoros_v1` | 50 tables, enums, indexes, RLS, audit append-only trigger |
-| `..0002_prospect_conversion` | atomic prospect → creator conversion |
-| `..0003_production_integrations` | `integration_credentials`, `oauth_states`, rate limiting, one-active-run fence |
-| `..0004_disambiguate_prospect_conversion` | fixes an ambiguous reference in 0002 |
-| `..0005_foundry_production_bootstrap` | the Foundry organization and workflow definitions |
-| `..0006_audit_truncate_guard` | statement-level TRUNCATE guard on audit tables |
-| `..0007_slack_agent_ingress` | Slack delivery ledger, identity map, agent transcripts |
+| Migration                                 | Contents                                                                       |
+| ----------------------------------------- | ------------------------------------------------------------------------------ |
+| `..0001_creatoros_v1`                     | 50 tables, enums, indexes, RLS, audit append-only trigger                      |
+| `..0002_prospect_conversion`              | atomic prospect → creator conversion                                           |
+| `..0003_production_integrations`          | `integration_credentials`, `oauth_states`, rate limiting, one-active-run fence |
+| `..0004_disambiguate_prospect_conversion` | fixes an ambiguous reference in 0002                                           |
+| `..0005_foundry_production_bootstrap`     | the Foundry organization and workflow definitions                              |
+| `..0006_audit_truncate_guard`             | statement-level TRUNCATE guard on audit tables                                 |
+| `..0007_slack_agent_ingress`              | Slack delivery ledger, identity map, agent transcripts                         |
 
 **Verify the replay actually succeeded** rather than assuming:
 
@@ -138,10 +138,10 @@ tenant isolation is unproven.** Run it against staging first.
 
 ## Failure modes
 
-| Symptom | Cause |
-| --- | --- |
-| `DATABASE_NOT_CONFIGURED` | Supabase URL or secret key missing in that environment |
-| Signed in but no session | Zero or two active memberships for that user |
-| `duplicate key ... organizations_pkey` on reset | Stale `seed.sql` predating the idempotency fix |
-| `PREVIEW_DEPLOYMENT_TARGETS_PRODUCTION_DATABASE` | Working as intended — a preview was pointed at production |
-| RLS blocks a server read | A route used the authenticated client where it needs the admin client, or the org filter is wrong |
+| Symptom                                          | Cause                                                                                             |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `DATABASE_NOT_CONFIGURED`                        | Supabase URL or secret key missing in that environment                                            |
+| Signed in but no session                         | Zero or two active memberships for that user                                                      |
+| `duplicate key ... organizations_pkey` on reset  | Stale `seed.sql` predating the idempotency fix                                                    |
+| `PREVIEW_DEPLOYMENT_TARGETS_PRODUCTION_DATABASE` | Working as intended — a preview was pointed at production                                         |
+| RLS blocks a server read                         | A route used the authenticated client where it needs the admin client, or the org filter is wrong |

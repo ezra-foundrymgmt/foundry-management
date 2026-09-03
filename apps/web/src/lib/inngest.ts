@@ -111,4 +111,3 @@ export const activateCreator = inngest.createFunction(
     return { workflowRunId: created.id, status: "RUNNING" };
   },
 );
-

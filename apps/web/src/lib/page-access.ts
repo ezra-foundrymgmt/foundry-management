@@ -16,6 +16,7 @@ export type PageAccess =
 export async function authorizePage(permission: Permission): Promise<PageAccess> {
   const session = await getSession().catch(() => null);
   if (!session) return { allowed: false, reason: "AUTHENTICATION_REQUIRED" };
-  if (!hasPermission(session.role, permission)) return { allowed: false, reason: "PERMISSION_DENIED" };
+  if (!hasPermission(session.role, permission))
+    return { allowed: false, reason: "PERMISSION_DENIED" };
   return { allowed: true, session };
 }

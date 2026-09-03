@@ -27,7 +27,8 @@ export async function postSlackReply(input: {
   });
   const data = (await response.json()) as { ok?: boolean; error?: string };
   // Never include the token or the message body in the error: this string is logged.
-  if (!response.ok || !data.ok) throw new Error(`SLACK_POST_FAILED: ${data.error ?? response.status}`);
+  if (!response.ok || !data.ok)
+    throw new Error(`SLACK_POST_FAILED: ${data.error ?? response.status}`);
 }
 
 const resourceSchema = z.object({ idempotency_key: z.string() });

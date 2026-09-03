@@ -67,7 +67,11 @@ class ScriptedNotion implements NotionProvider {
   }
 }
 
-function build(slack: SlackProvider, notion: NotionProvider, repository = new MemoryOnboardingRepository()) {
+function build(
+  slack: SlackProvider,
+  notion: NotionProvider,
+  repository = new MemoryOnboardingRepository(),
+) {
   return {
     repository,
     service: new OnboardingService(repository, {

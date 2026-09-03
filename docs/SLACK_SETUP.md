@@ -6,7 +6,7 @@ and either can work without the other.
 1. **Channel provisioning** — `CREATOR_ACTIVATION_V1` creates the creator and
    internal channels for each creator. Needs the OAuth install only.
 2. **The Foundry agent** — `@Foundry` mentions and DMs. Needs the OAuth install
-   *plus* Event Subscriptions *plus* `ANTHROPIC_API_KEY`.
+   _plus_ Event Subscriptions _plus_ `ANTHROPIC_API_KEY`.
 
 Nothing in this document has been exercised against live Slack. The code paths
 are complete; every step below is a human action that must be performed once.
@@ -16,12 +16,12 @@ are complete; every step below is a human action that must be performed once.
 Set these in Vercel (Production and Preview separately) and in `.env.local` for
 local work. Never commit them.
 
-| Variable | Where it comes from |
-| --- | --- |
-| `SLACK_CLIENT_ID` | Slack app → Basic Information → App Credentials |
-| `SLACK_CLIENT_SECRET` | same panel |
-| `SLACK_SIGNING_SECRET` | same panel — this is what verifies event authenticity |
-| `SLACK_REDIRECT_URI` | `https://<your-domain>/api/integrations/slack/callback` |
+| Variable               | Where it comes from                                     |
+| ---------------------- | ------------------------------------------------------- |
+| `SLACK_CLIENT_ID`      | Slack app → Basic Information → App Credentials         |
+| `SLACK_CLIENT_SECRET`  | same panel                                              |
+| `SLACK_SIGNING_SECRET` | same panel — this is what verifies event authenticity   |
+| `SLACK_REDIRECT_URI`   | `https://<your-domain>/api/integrations/slack/callback` |
 
 `SLACK_SIGNING_SECRET` is required for the events endpoint. Without it
 `/api/slack/events` returns 503 and never processes an event.
@@ -43,23 +43,23 @@ the environment variable cannot drift apart.
 The install requests exactly these, from
 `apps/web/src/app/api/integrations/slack/install/route.ts`:
 
-| Scope | Why CreatorOS needs it |
-| --- | --- |
-| `channels:manage` | create the creator and internal channels |
-| `channels:read` | find an existing channel so a retry does not create a duplicate |
-| `groups:write` | create private internal channels |
-| `groups:read` | same lookup, for private channels |
-| `chat:write` | post the welcome message and the agent's replies |
-| `users:read` | resolve Slack users when inviting them to a channel |
+| Scope             | Why CreatorOS needs it                                          |
+| ----------------- | --------------------------------------------------------------- |
+| `channels:manage` | create the creator and internal channels                        |
+| `channels:read`   | find an existing channel so a retry does not create a duplicate |
+| `groups:write`    | create private internal channels                                |
+| `groups:read`     | same lookup, for private channels                               |
+| `chat:write`      | post the welcome message and the agent's replies                |
+| `users:read`      | resolve Slack users when inviting them to a channel             |
 
 For the agent, also add:
 
-| Scope | Why |
-| --- | --- |
-| `app_mentions:read` | receive `@Foundry` mentions |
-| `im:history` | read the DM text the agent is asked to answer |
-| `im:read` | resolve DM channels |
-| `im:write` | reply in a DM |
+| Scope               | Why                                           |
+| ------------------- | --------------------------------------------- |
+| `app_mentions:read` | receive `@Foundry` mentions                   |
+| `im:history`        | read the DM text the agent is asked to answer |
+| `im:read`           | resolve DM channels                           |
+| `im:write`          | reply in a DM                                 |
 
 ### Least-privilege review of the existing app
 
@@ -104,7 +104,7 @@ https://<your-domain>/api/slack/events
 ```
 
 Slack immediately sends a signed `url_verification` challenge. The endpoint
-verifies the signature *before* answering it, so the signing secret must already
+verifies the signature _before_ answering it, so the signing secret must already
 be set in the deployed environment or verification fails and the URL will not
 save.
 
@@ -136,7 +136,7 @@ values
 
 - `slack_team_id` is the workspace id (`T…`), visible in the connection row.
 - `slack_user_id` is the member id (`U…`), from the Slack profile menu →
-  *Copy member ID*.
+  _Copy member ID_.
 
 The agent runs every tool as that CreatorOS user, with that user's role. Ezra and
 Payton need one row each; they must not share a mapping.
@@ -154,11 +154,11 @@ Payton need one row each; they must not share a mapping.
 
 ## Failure modes
 
-| Symptom | Cause |
-| --- | --- |
+| Symptom                               | Cause                                                                              |
+| ------------------------------------- | ---------------------------------------------------------------------------------- |
 | Slack shows "Your URL didn't respond" | `SLACK_SIGNING_SECRET` not set in that environment, or the domain is not reachable |
-| `401` on every event | Signing secret does not match the app that sent the event |
-| Events accepted, no reply | `ANTHROPIC_API_KEY` unset, or Inngest not receiving events |
-| "Your Slack account isn't linked" | No `slack_user_identities` row for that Slack user |
-| Agent answers twice | Two deployments serving the same Slack app against different databases |
-| Replies stop after reinstall | Token rotated; reconnect through Settings → Integrations |
+| `401` on every event                  | Signing secret does not match the app that sent the event                          |
+| Events accepted, no reply             | `ANTHROPIC_API_KEY` unset, or Inngest not receiving events                         |
+| "Your Slack account isn't linked"     | No `slack_user_identities` row for that Slack user                                 |
+| Agent answers twice                   | Two deployments serving the same Slack app against different databases             |
+| Replies stop after reinstall          | Token rotated; reconnect through Settings → Integrations                           |

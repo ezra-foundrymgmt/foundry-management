@@ -21,11 +21,13 @@ unless it says otherwise.
 ## The big ones
 
 ### The application is not deployed — CREDENTIAL BLOCKED
+
 The Vercel project is linked but nothing has been deployed. CreatorOS is not
 reachable from anywhere, so it still depends on localhost in practice. The
 hosted PWA cannot be installed until a deployment exists.
 
 ### The migration chain has never been replayed — CREDENTIAL BLOCKED
+
 There are seven migrations. They have been reviewed statically but never
 executed in order against a real Postgres. No Docker and no `psql` are available
 on the build machine, and per instruction nothing destructive was run against
@@ -37,21 +39,24 @@ seven inserts are now idempotent. That fix is itself unverified against a real
 database.
 
 ### RLS and tenant isolation are unproven against a real database — CREDENTIAL BLOCKED
+
 The policies read correctly: `is_organization_member()` is `security definer`
 with an empty `search_path` and resolves through `auth.uid()`, applied to 50
 tables, with browser roles reduced to `select` only. `apps/web/scripts/verify-live.mjs`
 is a real adversarial script that creates two organizations and asserts cross-tenant
 reads and writes fail. **It has never been run.** Run it first once credentials exist.
 
-Agent-level tenant isolation *is* MACHINE VERIFIED: 11 tests assert every agent
+Agent-level tenant isolation _is_ MACHINE VERIFIED: 11 tests assert every agent
 tool query carries an `organization_id` filter equal to the caller's session org.
 
 ### The Foundry agent has never spoken to Slack or Claude — CREDENTIAL BLOCKED
+
 Signature verification, event dedupe, the tool registry and the authorization
 gate are MACHINE VERIFIED by 37 tests. The end-to-end path — a real `@Foundry`
 mention producing a real reply — has never run.
 
 ### 21 of the 26 activation steps do nothing — PARTIAL
+
 `ACTIVATION_STEPS` lists 26 names and the orchestration around them is real:
 per-step checkpointing, persistence, idempotency, attempt counters, resume.
 But only five steps perform work (the two Slack channels, two Notion pages, and
@@ -66,6 +71,7 @@ provisioned and the rest were marked done. This is the single largest gap
 between what the workflow claims and what it does.
 
 ### Most pages still render fictional seed data — PARTIAL
+
 Only `/creators`, `/crm/prospects` and `/audit` read from Supabase. The command
 centre, creator detail, tasks, reports, experiments, content, economics,
 incidents, workflows and applications pages render fixtures from
@@ -76,37 +82,40 @@ numbers are fictional and identical in every environment.
 `workflow_runs`, so it does not reflect real activation state.
 
 ### CRM is read-only — PARTIAL
+
 There is no create, edit, stage change, owner assignment, follow-up, activity
 log, note, or archive for prospects. The search inputs on `/creators` and
 `/crm/prospects` and the "Filters" buttons render but do nothing. "Add prospect"
 and "Add creator" are disabled. Prospect → creator conversion works.
 
 ### No daily report producer — MISSING
+
 Nothing writes to `daily_creator_reports`. The Inngest report function reads
 from the seed fixture, not the table. The reports page will stay empty against a
 real database.
 
 ### Slack identity mapping is manual — PARTIAL
+
 `slack_user_identities` has no UI. Linking Ezra and Payton is a hand-written SQL
 insert (`docs/SLACK_SETUP.md` §6). An unmapped Slack user is refused, which is
 correct but means the agent does nothing until the inserts are done.
 
 ## Smaller, specific gaps
 
-| Area | Status | Detail |
-| --- | --- | --- |
-| Notion duplicate page | PARTIAL | Store lookup plus title reconcile. Notion's search index is eventually consistent, so a crash-and-retry inside the indexing window can still create a second hub page. Notion offers no create-if-absent, so this cannot be fully closed client-side. |
-| `database.types.ts` | PARTIAL | A 26-line stub, not generated types. Supabase queries are effectively untyped; a column rename would compile fine and fail at runtime. |
-| Observability | PARTIAL | `logEvent` writes structured JSON to stdout with key-based redaction. There is no Sentry wiring, no alerting, and no error aggregation. `SENTRY_DSN` is accepted and unused. |
-| Rate limiting | PARTIAL | A DB-backed `consume_api_rate_limit` function exists and is used on write routes. Reads and the Slack ingress are unlimited. |
-| Audit coverage | PARTIAL | Integration connects and some mutations append audit events. Not every write is audited. |
-| `audit_events` immutability | MACHINE VERIFIED (static) | UPDATE and DELETE blocked by trigger; TRUNCATE blocked by a statement trigger added in migration 0006. Never executed. |
-| e2e coverage | PARTIAL | Six Playwright tests, all in mock mode as an unauthenticated super_admin. Nothing exercises real auth, multi-user, or live data. CI does not run them and does not install browsers. |
-| Multi-user | MISSING | Ezra and Payton have no accounts yet. Concurrent-editing behaviour is untested. |
-| Offboarding | PARTIAL | `OFFBOARDING_STEPS` is a nine-step list with no executor. |
-| Google Workspace | MISSING | Deliberately out of scope. `ManualFileStorageProvider` returns a placeholder. |
-| OnlyFans | MISSING by design | `OnlyFansProviderPlaceholder` returns `NOT_CONFIGURED` and performs no scraping or unofficial automation. Correct and intentional. |
-| Backups | MISSING | No backup or restore procedure has been tested. Supabase's own backups are whatever the project's plan provides. |
+| Area                        | Status                    | Detail                                                                                                                                                                                                                                                |
+| --------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Notion duplicate page       | PARTIAL                   | Store lookup plus title reconcile. Notion's search index is eventually consistent, so a crash-and-retry inside the indexing window can still create a second hub page. Notion offers no create-if-absent, so this cannot be fully closed client-side. |
+| `database.types.ts`         | PARTIAL                   | A 26-line stub, not generated types. Supabase queries are effectively untyped; a column rename would compile fine and fail at runtime.                                                                                                                |
+| Observability               | PARTIAL                   | `logEvent` writes structured JSON to stdout with key-based redaction. There is no Sentry wiring, no alerting, and no error aggregation. `SENTRY_DSN` is accepted and unused.                                                                          |
+| Rate limiting               | PARTIAL                   | A DB-backed `consume_api_rate_limit` function exists and is used on write routes. Reads and the Slack ingress are unlimited.                                                                                                                          |
+| Audit coverage              | PARTIAL                   | Integration connects and some mutations append audit events. Not every write is audited.                                                                                                                                                              |
+| `audit_events` immutability | MACHINE VERIFIED (static) | UPDATE and DELETE blocked by trigger; TRUNCATE blocked by a statement trigger added in migration 0006. Never executed.                                                                                                                                |
+| e2e coverage                | PARTIAL                   | Six Playwright tests, all in mock mode as an unauthenticated super_admin. Nothing exercises real auth, multi-user, or live data. CI does not run them and does not install browsers.                                                                  |
+| Multi-user                  | MISSING                   | Ezra and Payton have no accounts yet. Concurrent-editing behaviour is untested.                                                                                                                                                                       |
+| Offboarding                 | PARTIAL                   | `OFFBOARDING_STEPS` is a nine-step list with no executor.                                                                                                                                                                                             |
+| Google Workspace            | MISSING                   | Deliberately out of scope. `ManualFileStorageProvider` returns a placeholder.                                                                                                                                                                         |
+| OnlyFans                    | MISSING by design         | `OnlyFansProviderPlaceholder` returns `NOT_CONFIGURED` and performs no scraping or unofficial automation. Correct and intentional.                                                                                                                    |
+| Backups                     | MISSING                   | No backup or restore procedure has been tested. Supabase's own backups are whatever the project's plan provides.                                                                                                                                      |
 
 ## Things that are genuinely solid
 
