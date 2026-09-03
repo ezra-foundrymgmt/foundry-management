@@ -140,7 +140,7 @@ export default async function CreatorPage({ params }: { params: Promise<{ creato
         </div>
         <div className="actions">
           <StatusBadge value={creator.status} />
-          <OnboardingButton />
+          <OnboardingButton creatorId={creator.id} />
         </div>
       </header>
 

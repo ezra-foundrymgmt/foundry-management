@@ -3,7 +3,6 @@ import { creators } from "@creatoros/domain";
 import { AccessDenied } from "@/components/access-denied";
 import { DemoStrip, PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
-import { OnboardingButton } from "@/components/onboarding-button";
 import { ResumeWorkflowButton } from "@/components/resume-workflow-button";
 import { isMockMode } from "@/lib/environment";
 import { getLiveWorkflowRuns, type LiveWorkflowRun } from "@/lib/live-data";
@@ -61,7 +60,6 @@ export default async function WorkflowsPage() {
         eyebrow="Deterministic operations"
         title="Workflow control"
         subtitle="Every durable run, step, retry, provider result, and blocker in one auditable view."
-        actions={<OnboardingButton />}
       />
 
       {runs.length === 0 ? (
