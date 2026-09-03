@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   LiveNotionProvider,
   LiveSlackProvider,
+  lookupSlackUser,
   composeChannelName,
   MockSlackProvider,
   OnlyFansProviderPlaceholder,
@@ -320,5 +321,109 @@ describe("live provider adapters", () => {
       idempotencyKey: "notion:1",
     });
     expect(resource.externalId).toBe("page-fresh");
+  });
+});
+
+/**
+ * The Slack account behind a member ID has to be a real, human, current member
+ * of this workspace before anyone can link it to a CreatorOS identity. Every
+ * case below would otherwise become a live authorization grant.
+ */
+describe("Slack user lookup", () => {
+  function respond(body: unknown, status = 200) {
+    return () => Promise.resolve(new Response(JSON.stringify(body), { status }));
+  }
+
+  it("returns the account's team and display name", async () => {
+    const result = await lookupSlackUser(
+      "xoxb-token",
+      "U0PAYTON",
+      respond({
+        ok: true,
+        user: { id: "U0PAYTON", team_id: "T0FOUNDRY", profile: { display_name: "payton" } },
+      }),
+    );
+
+    expect(result).toEqual({
+      slackUserId: "U0PAYTON",
+      slackTeamId: "T0FOUNDRY",
+      displayName: "payton",
+    });
+  });
+
+  it("falls back through real name to handle when no display name is set", async () => {
+    const result = await lookupSlackUser(
+      "xoxb-token",
+      "U0PAYTON",
+      respond({
+        ok: true,
+        user: {
+          id: "U0PAYTON",
+          team_id: "T0FOUNDRY",
+          name: "payton.handle",
+          profile: { display_name: "  ", real_name: "Payton" },
+        },
+      }),
+    );
+
+    expect(result?.displayName).toBe("Payton");
+  });
+
+  it("treats an unknown member ID as an answer, not an error", async () => {
+    const result = await lookupSlackUser(
+      "xoxb-token",
+      "U0TYPO",
+      respond({ ok: false, error: "user_not_found" }),
+    );
+
+    expect(result).toBeNull();
+  });
+
+  it("refuses deactivated accounts and bots", async () => {
+    const deleted = await lookupSlackUser(
+      "xoxb-token",
+      "U0GONE",
+      respond({
+        ok: true,
+        user: { id: "U0GONE", team_id: "T0FOUNDRY", deleted: true, profile: {} },
+      }),
+    );
+    // A bot carrying a founder's permissions is not an identity anyone granted.
+    const bot = await lookupSlackUser(
+      "xoxb-token",
+      "U0BOT",
+      respond({
+        ok: true,
+        user: { id: "U0BOT", team_id: "T0FOUNDRY", is_bot: true, profile: {} },
+      }),
+    );
+
+    expect(deleted).toBeNull();
+    expect(bot).toBeNull();
+  });
+
+  it("raises rather than denying when Slack itself fails", async () => {
+    // A revoked token answering "not found" would silently look like a bad ID.
+    await expect(
+      lookupSlackUser("xoxb-token", "U0PAYTON", respond({ ok: false, error: "invalid_auth" })),
+    ).rejects.toThrow(/SLACK_invalid_auth/);
+    await expect(
+      lookupSlackUser("xoxb-token", "U0PAYTON", respond({}, 500) as unknown as typeof fetch),
+    ).rejects.toThrow(/SLACK_HTTP_500/);
+  });
+
+  it("never puts the token in the URL", async () => {
+    let seenUrl = "";
+    await lookupSlackUser("xoxb-secret", "U0PAYTON", ((url: string) => {
+      seenUrl = url;
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ ok: true, user: { id: "U0PAYTON", team_id: "T0FOUNDRY", profile: {} } }),
+        ),
+      );
+    }) as unknown as typeof fetch);
+
+    expect(seenUrl).not.toContain("xoxb-secret");
+    expect(seenUrl).toContain("U0PAYTON");
   });
 });

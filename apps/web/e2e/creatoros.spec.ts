@@ -98,8 +98,11 @@ test("WebMCP tools register and use the same tenant-scoped search", async ({ pag
 test("integration registry and installable PWA assets are navigable", async ({ page, request }) => {
   await page.goto("/settings/integrations");
   await expect(page.getByRole("heading", { name: "Integrations" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Slack" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Notion" })).toBeVisible();
+  // Exact: the page also carries a "Slack identities" heading, and the provider
+  // card is the one this asserts on.
+  await expect(page.getByRole("heading", { name: "Slack", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Notion", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Slack identities" })).toBeVisible();
   await expect(page.getByText("OAuth state is single-use")).toBeVisible();
   const manifest = await request.get("/manifest.webmanifest");
   expect(manifest.ok()).toBeTruthy();

@@ -11,9 +11,12 @@ import {
 } from "lucide-react";
 import { DemoStrip, PageHeader } from "@/components/page-header";
 import { IntegrationControl } from "@/components/integration-control";
+import { SlackIdentityManager } from "@/components/slack-identity-manager";
 import { StatusBadge } from "@/components/status-badge";
 import { isMockMode } from "@/lib/environment";
 import { listIntegrationConnections } from "@/lib/integration-registry";
+import { listSlackIdentities } from "@/lib/slack-identities";
+import { hasPermission } from "@creatoros/domain";
 
 interface ConnectionRecord {
   provider: string;
@@ -40,6 +43,12 @@ export default async function IntegrationSettingsPage() {
   const records = mock
     ? []
     : ((await listIntegrationConnections(access.session.organizationId)) as ConnectionRecord[]);
+  // Slack identity administration is a separate authority from reading which
+  // providers are connected: linking an account grants it that user's role in
+  // the Foundry agent.
+  const canManageIdentities = hasPermission(access.session.role, "user.manage");
+  const identities =
+    canManageIdentities && !mock ? await listSlackIdentities(access.session.organizationId) : [];
   const find = (provider: string) => records.find((item) => item.provider === provider);
   const slack = find("SLACK");
   const notion = find("NOTION");
@@ -95,6 +104,24 @@ export default async function IntegrationSettingsPage() {
           needsConfiguration={!notion?.configuration_json?.["parentPageId"]}
         />
       </div>
+
+      {canManageIdentities ? (
+        <section className="card card-pad">
+          <h2>Slack identities</h2>
+          <p className="subtitle" style={{ marginTop: 6, lineHeight: 1.6 }}>
+            The Foundry agent answers as the CreatorOS user a Slack account is linked to, with that
+            user's role. An unlinked Slack account is denied — being in the workspace is not
+            authorization. Slack confirms each account exists before the link is saved.
+          </p>
+          {mock ? (
+            <p className="integration-note">
+              Identity mapping is administered against live records. Preview mode has none.
+            </p>
+          ) : (
+            <SlackIdentityManager identities={identities} />
+          )}
+        </section>
+      ) : null}
 
       <section className="card card-pad integration-security">
         <ShieldCheck size={18} />

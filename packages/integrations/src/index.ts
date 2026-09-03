@@ -86,6 +86,19 @@ class ProviderApiError extends Error {
   }
 }
 
+interface SlackUserInfoResponse {
+  ok: boolean;
+  error?: string;
+  user?: {
+    id?: string;
+    team_id?: string;
+    name?: string;
+    deleted?: boolean;
+    is_bot?: boolean;
+    profile?: { display_name?: string; real_name?: string };
+  };
+}
+
 interface SlackResponse {
   ok: boolean;
   error?: string;
@@ -543,4 +556,52 @@ export class NotConfiguredSlackProvider implements SlackProvider {
   archiveChannel(): Promise<void> {
     return Promise.reject(this.#error());
   }
+}
+
+export interface SlackUserSummary {
+  slackUserId: string;
+  slackTeamId: string;
+  displayName: string;
+}
+
+/**
+ * Confirms a Slack account exists in the workspace before anyone is allowed to
+ * link it to a CreatorOS identity.
+ *
+ * A mapping is an authorization grant: whoever holds that Slack account gets to
+ * ask the Foundry agent questions as the CreatorOS user it points at. A typo in
+ * a Slack ID would otherwise create a live grant addressed to nobody, waiting
+ * for Slack to assign that ID to someone.
+ *
+ * Deleted accounts and bots return null. A bot carrying a founder's permissions
+ * is not an identity anyone decided to grant.
+ */
+export async function lookupSlackUser(
+  token: string,
+  slackUserId: string,
+  request: FetchLike = fetch,
+): Promise<SlackUserSummary | null> {
+  const response = await request(
+    `https://slack.com/api/users.info?user=${encodeURIComponent(slackUserId)}`,
+    { method: "GET", headers: { authorization: `Bearer ${token}` } },
+  );
+  if (!response.ok) throw new ProviderApiError("SLACK", `HTTP_${response.status}`);
+  const body = (await response.json()) as SlackUserInfoResponse;
+  // user_not_found is the answer to the question, not a failure to answer it.
+  if (!body.ok) {
+    if (body.error === "user_not_found") return null;
+    throw new ProviderApiError("SLACK", body.error ?? "USER_LOOKUP_FAILED");
+  }
+  const user = body.user;
+  if (!user?.id || !user.team_id) return null;
+  if (user.deleted === true || user.is_bot === true) return null;
+  return {
+    slackUserId: user.id,
+    slackTeamId: user.team_id,
+    displayName:
+      user.profile?.display_name?.trim() ||
+      user.profile?.real_name?.trim() ||
+      user.name?.trim() ||
+      user.id,
+  };
 }
