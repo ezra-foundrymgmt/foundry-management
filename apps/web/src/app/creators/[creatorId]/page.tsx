@@ -7,6 +7,7 @@ import {
 import { ArrowLeft } from "lucide-react";
 import { AccessDenied } from "@/components/access-denied";
 import { OnboardingButton } from "@/components/onboarding-button";
+import { ReadinessPanel, type ReadinessState } from "@/components/readiness-panel";
 import { StatusBadge } from "@/components/status-badge";
 import {
   formatMoney,
@@ -15,6 +16,7 @@ import {
   trendClassName,
   UNKNOWN_DISPLAY,
 } from "@/lib/format";
+import { evaluateActivationReadiness } from "@/lib/activation-readiness";
 import { isMockMode } from "@/lib/environment";
 import { getLiveCreatorDetail, type LiveCreatorDetail } from "@/lib/live-data";
 import { authorizePage } from "@/lib/page-access";
@@ -96,6 +98,24 @@ export default async function CreatorPage({ params }: { params: Promise<{ creato
 
   const { creator, latestReport, tasks, brandProfile, boundaries, baselineFrozen } = detail;
 
+  // Evaluated against the records themselves, so this panel disagrees with the
+  // creator status whenever the status is wrong. A failed evaluation says so
+  // rather than defaulting to a reassuring answer.
+  const readiness: ReadinessState = mock
+    ? {
+        evaluated: false,
+        reason: "demo mode has no live records to evaluate against",
+      }
+    : await evaluateActivationReadiness({
+        organizationId: access.session.organizationId,
+        creatorId,
+      })
+        .then((result) => ({ evaluated: true, readiness: result }) as const)
+        .catch((error: unknown) => ({
+          evaluated: false as const,
+          reason: error instanceof Error ? error.message : "readiness could not be read",
+        }));
+
   return (
     <main className="page">
       <a
@@ -160,6 +180,8 @@ export default async function CreatorPage({ params }: { params: Promise<{ creato
 
       <div className="grid dashboard-grid">
         <div className="grid">
+          <ReadinessPanel state={readiness} />
+
           <section className="card card-pad">
             <h2>Latest daily report</h2>
             {latestReport ? (

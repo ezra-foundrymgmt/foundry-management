@@ -1,5 +1,6 @@
 import "server-only";
 import type { ActivationRecordPort, OnboardingCreator } from "@creatoros/workflows";
+import { evaluateActivationReadiness } from "@/lib/activation-readiness";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 /**
@@ -58,6 +59,9 @@ export class SupabaseActivationRecordPort implements ActivationRecordPort {
       .eq("organization_id", this.organizationId)
       .eq("id", creator.id);
     if (error) throw new Error(`ACTIVATION_START_FAILED: ${error.message}`);
+    await this.#audit(creator.id, "creator.activation.started", {
+      creatorNumber: creator.creatorNumber,
+    });
   }
 
   assignTeam(creator: OnboardingCreator): Promise<void> {
@@ -273,15 +277,60 @@ export class SupabaseActivationRecordPort implements ActivationRecordPort {
   }
 
   /**
-   * The only step that moves the creator to ACTIVE. It runs after the baseline
-   * gate, so ACTIVE means provisioning finished *and* baseline data arrived.
+   * The only step that moves the creator to ACTIVE.
+   *
+   * Reaching this step is not evidence that the creator is ready. The step order
+   * says the earlier steps ran; it does not say they left anything behind. The
+   * readiness evaluator re-checks every record ACTIVE is supposed to mean, at
+   * the moment the status is written, so a step that silently did nothing or a
+   * record deleted mid-run stops the activation instead of producing an ACTIVE
+   * creator with nothing behind it.
    */
   async completeActivation(creator: OnboardingCreator): Promise<void> {
+    const readiness = await evaluateActivationReadiness({
+      organizationId: this.organizationId,
+      creatorId: creator.id,
+    });
+    if (readiness.status !== "READY")
+      throw new Error(
+        `CREATOR_NOT_READY_FOR_ACTIVE:${readiness.status}: ${readiness.reasons.join("; ")}`,
+      );
+
     const { error } = await this.#admin()
       .from("creators")
       .update({ status: "ACTIVE", updated_at: new Date().toISOString() })
       .eq("organization_id", this.organizationId)
       .eq("id", creator.id);
     if (error) throw new Error(`ACTIVATION_COMPLETE_FAILED: ${error.message}`);
+    await this.#audit(creator.id, "creator.activation.completed", {
+      checks: readiness.checks.length,
+    });
+  }
+
+  /**
+   * Appends to the immutable trail. Activation is the most consequential thing
+   * CreatorOS does to a creator record and it previously left no trace: the
+   * status changed and nothing said who started it or when.
+   *
+   * The actor is the workflow acting on behalf of the founder who started it,
+   * not the founder directly, because no person performed this write.
+   */
+  async #audit(
+    creatorId: string,
+    action: string,
+    metadata: Record<string, unknown>,
+  ): Promise<void> {
+    const { error } = await this.#admin().from("audit_events").insert({
+      organization_id: this.organizationId,
+      actor_type: "workflow",
+      actor_user_id: this.actorUserId,
+      actor_service: "CREATOR_ACTIVATION_V1",
+      action,
+      resource_type: "creator",
+      resource_id: creatorId,
+      metadata_json: metadata,
+      correlation_id: crypto.randomUUID(),
+    });
+    if (error) throw new Error(`ACTIVATION_AUDIT_FAILED: ${error.message}`);
   }
 }
