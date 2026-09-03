@@ -81,6 +81,9 @@ grant all on public.agent_interactions to service_role;
 
 -- Agent transcripts are readable in-app by members of the owning organization,
 -- through the same tenant predicate every other business table uses.
+-- Dropped first: every other statement in this migration is if-not-exists, and a
+-- bare create policy would make the whole file fail on a re-run.
+drop policy if exists tenant_isolation on public.agent_interactions;
 create policy tenant_isolation on public.agent_interactions
   for all to authenticated
   using (public.is_organization_member(organization_id))

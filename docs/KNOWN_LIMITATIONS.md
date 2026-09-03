@@ -100,6 +100,23 @@ real database.
 insert (`docs/SLACK_SETUP.md` §6). An unmapped Slack user is refused, which is
 correct but means the agent does nothing until the inserts are done.
 
+### Findings from adversarial review that are NOT fixed
+
+A 12-agent adversarial review executed the code against fake providers. The
+critical and high findings were fixed and are covered by tests. These were
+confirmed and deliberately left, with the reasoning:
+
+| Finding | Why it is still open |
+| --- | --- |
+| The agent permission gate is not backed by RLS | A role denied a tool can still read the same tables directly with its own Supabase JWT, because browser roles hold `select` on business tables. The gate stops the *agent* from retrieving it, not the database from serving it. Closing this means per-table role policies, which is a schema-wide change. |
+| Prompt injection through database content is requested in the prompt, not enforced | The system prompt tells the model that tool results are data, not instructions. Nothing in code enforces it. A creator who writes instructions into a field the agent reads could influence its output. It cannot escalate permissions — the gate is outside the model — but it can shape an answer. |
+| The creator-facing surface is not bound to a *specific* creator | A creator channel is correctly identified as creator-facing, but the tool gate does not additionally check that the creator being asked about is the creator whose channel it is. An operator in creator A's channel can ask about creator B and get an answer. |
+| `INNGEST_DEV` disables signature verification on `/api/inngest` | It is outside the environment contract, so a deploy that sets it turns off verification on a proxy-exempt route with nothing to catch it. |
+| `/api/health` is unauthenticated and discloses environment and which secrets are configured | Useful for uptime checks, but it tells an anonymous caller more than it needs to. |
+| No rate limit or concurrency cap on the agent | An authorised Slack user can trigger unbounded model spend. Activation now has a concurrency cap; the agent does not. |
+| Prerequisite and compliance blockers are evaluated only at run creation | Unlike the baseline gate, they are not re-checked on resume. A creator whose contract lapses mid-activation still completes. |
+| Raw Postgres error text reaches the model context | A database error string is passed back as a tool result and can be relayed into Slack. |
+
 ## Smaller, specific gaps
 
 | Area                        | Status                    | Detail                                                                                                                                                                                                                                                |

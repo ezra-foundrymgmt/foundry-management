@@ -53,10 +53,13 @@ export function isSelfAuthoredEvent(
   return false;
 }
 
+/** The longest prompt the agent will accept, matching the Inngest event schema. */
+export const MAX_PROMPT_LENGTH = 4000;
+
 export function shouldProcessEvent(
   payload: SlackEventCallback,
   botUserId: string | null,
-): { process: false; reason: string } | { process: true } {
+): { process: false; reason: string } | { process: true; prompt: string } {
   const event = payload.event;
   if (!HANDLED_EVENT_TYPES.includes(event.type as (typeof HANDLED_EVENT_TYPES)[number]))
     return { process: false, reason: `UNHANDLED_EVENT_TYPE:${event.type}` };
@@ -66,14 +69,29 @@ export function shouldProcessEvent(
   // are addressed to the agent.
   if (event.type === "message" && event.channel_type !== "im")
     return { process: false, reason: "CHANNEL_MESSAGE_WITHOUT_MENTION" };
-  if (!event.text?.trim()) return { process: false, reason: "EMPTY_TEXT" };
-  return { process: true };
+  // A DM that also mentions the bot is delivered twice — once as app_mention and
+  // once as message.im, with different event_ids, so the delivery ledger cannot
+  // collapse them. Defer to the app_mention copy so the agent answers once.
+  if (event.type === "message" && botUserId && (event.text ?? "").includes(`<@${botUserId}`))
+    return { process: false, reason: "DUPLICATE_OF_APP_MENTION" };
+  // Validate the prompt the model will actually receive, not the raw text: a
+  // bare "@Foundry" is non-empty until the mention is stripped, and would be
+  // enqueued only to fail schema validation with nobody told.
+  const prompt = stripMention(event.text ?? "");
+  if (!prompt) return { process: false, reason: "EMPTY_AFTER_MENTION_STRIP" };
+  return { process: true, prompt: prompt.slice(0, MAX_PROMPT_LENGTH) };
 }
 
-/** Strips the leading `<@U123>` mention so the model sees the actual question. */
+/**
+ * Strips Slack mention markup so the model sees the question.
+ *
+ * Slack writes mentions as `<@U123>` or, in link-formatted payloads,
+ * `<@U123|display-name>`; the labelled form must be matched too or it reaches
+ * the prompt as literal markup.
+ */
 export function stripMention(text: string): string {
   return text
-    .replace(/<@[A-Z0-9]+>/g, " ")
+    .replace(/<@[A-Z0-9]+(\|[^>]*)?>/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
 }

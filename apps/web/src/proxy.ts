@@ -29,9 +29,15 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    // api/slack is excluded because Slack authenticates with a request
+    // Exclusions are anchored at a path-segment boundary and name the exact
+    // routes. A bare prefix such as `api/slack` would also exempt a future
+    // /api/slack-admin or /api/slackbot route, silently shipping it without
+    // authentication.
+    //
+    // api/slack/events is exempt because Slack authenticates with a request
     // signature rather than a session cookie; redirecting it to /login would
-    // break the events endpoint and Slack would retry the redirect forever.
-    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|sw.js|icons/|api/health|api/inngest|api/slack).*)",
+    // break the endpoint and Slack would retry the redirect forever. api/inngest
+    // authenticates with its signing key for the same reason.
+    "/((?!_next/static/|_next/image/|favicon\\.ico$|manifest\\.webmanifest$|sw\\.js$|icons/|api/health$|api/inngest$|api/inngest/|api/slack/events$).*)",
   ],
 };

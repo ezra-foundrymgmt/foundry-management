@@ -11,8 +11,10 @@ import {
   releaseSlackEvent,
   slackEventCallbackSchema,
   slackUrlVerificationSchema,
-  stripMention,
 } from "@/lib/slack-events";
+
+/** Slack event payloads are a few KB; this is generous headroom. */
+const MAX_SLACK_BODY_BYTES = 1_000_000;
 
 /**
  * Slack's events ingress.
@@ -31,9 +33,19 @@ export async function POST(request: Request) {
   const environment = getEnvironment();
   const signingSecret = environment.SLACK_SIGNING_SECRET;
 
+  // Reject an oversized body before buffering and HMACing it. This route is
+  // unauthenticated by design, so anything it does before verifying a signature
+  // is work an anonymous caller can make the server do.
+  const declaredLength = Number(request.headers.get("content-length") ?? "0");
+  if (declaredLength > MAX_SLACK_BODY_BYTES)
+    return NextResponse.json({ error: "PAYLOAD_TOO_LARGE" }, { status: 413 });
+
   // Byte-exact body. Parsing first and re-serialising would change key order and
   // whitespace, and the signature would never match.
   const rawBody = await request.text();
+  // Chunked requests arrive without a content-length, so check the real size too.
+  if (rawBody.length > MAX_SLACK_BODY_BYTES)
+    return NextResponse.json({ error: "PAYLOAD_TOO_LARGE" }, { status: 413 });
 
   if (!signingSecret) {
     logEvent("error", "slack.events.not_configured", { correlationId });
@@ -127,7 +139,7 @@ export async function POST(request: Request) {
         slackUserId: event.event.user,
         channelId: event.event.channel,
         threadTs: event.event.thread_ts ?? event.event.ts,
-        prompt: stripMention(event.event.text ?? ""),
+        prompt: decision.prompt,
         correlationId,
       },
     });

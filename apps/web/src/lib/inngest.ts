@@ -71,6 +71,10 @@ export const activateCreator = inngest.createFunction(
     id: "creator-activation-v1",
     retries: 4,
     idempotency: "event.data.idempotencyKey",
+    // The in-process creator lock is a no-op in the Supabase repository, so this
+    // is what actually serialises execution: two invocations advancing the same
+    // run would both read the same step as pending and provision it twice.
+    concurrency: { key: "event.data.creatorId", limit: 1 },
     triggers: [{ event: "creator.activation.requested" }, { event: "creator.activation.resume" }],
   },
   async ({ event, step }) => {
@@ -91,9 +95,12 @@ export const activateCreator = inngest.createFunction(
     if (created.status === "BLOCKED")
       return { workflowRunId: created.id, status: "BLOCKED", blockers: created.blockers };
 
-    // One checkpoint per activation step. An interrupted deploy resumes at the
-    // step boundary it reached rather than replaying all 26 from the beginning.
-    for (const stepName of ACTIVATION_STEPS) {
+    // One checkpoint per activation step, plus one. Completing the 26th step
+    // leaves the run RUNNING; it is the following advance that finds nothing
+    // left and marks it SUCCEEDED, so a straight-through activation needs 27
+    // passes to finish.
+    const passes = [...ACTIVATION_STEPS, "FINALIZE" as const];
+    for (const stepName of passes) {
       const outcome = await step.run(`activation:${stepName}`, () => advanceOneStep(input));
       if (outcome.status === "WAITING_EXTERNAL")
         return {

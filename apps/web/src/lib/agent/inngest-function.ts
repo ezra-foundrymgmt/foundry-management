@@ -15,6 +15,7 @@ const agentEventSchema = z.object({
   slackEventId: z.string().min(1),
   slackUserId: z.string().min(1),
   channelId: z.string().min(1),
+  isDirectMessage: z.boolean().optional(),
   threadTs: z.string().nullable().optional(),
   prompt: z.string().min(1).max(4000),
   correlationId: z.string().min(1),
@@ -84,11 +85,15 @@ export const respondToSlackMention = inngest.createFunction(
       };
     });
 
-    const slack = await step.run("load-slack-token", async () => {
+    // Deliberately NOT inside step.run: Inngest persists a step's return value
+    // in its own run state, so returning the decrypted bot token from a step
+    // would copy a live credential out of the database and into Inngest Cloud.
+    // It is re-read from Supabase on each attempt instead.
+    const loadSlackToken = async () => {
       const token = await getIntegrationToken(input.organizationId, "SLACK");
       if (!token) throw new NonRetriableError("SLACK_INTEGRATION_NOT_CONNECTED");
-      return token;
-    });
+      return token.token;
+    };
 
     if (!session) {
       logEvent("warn", "agent.unmapped_slack_user", {
@@ -96,9 +101,9 @@ export const respondToSlackMention = inngest.createFunction(
         organizationId: input.organizationId,
         slackUserId: input.slackUserId,
       });
-      await step.run("reply-unmapped-user", () =>
+      await step.run("reply-unmapped-user", async () =>
         postSlackReply({
-          token: slack.token,
+          token: await loadSlackToken(),
           channel: input.channelId,
           threadTs: input.threadTs ?? null,
           // Says nothing about what exists; only that this Slack account is not linked.
@@ -109,7 +114,9 @@ export const respondToSlackMention = inngest.createFunction(
     }
 
     const interactionId = await step.run("record-agent-interaction", async () => {
-      const creatorFacing = await isCreatorFacingChannel(input.organizationId, input.channelId);
+      const creatorFacing = await isCreatorFacingChannel(input.organizationId, input.channelId, {
+        isDirectMessage: input.isDirectMessage ?? false,
+      });
       const { data, error } = await admin()
         .from("agent_interactions")
         .insert({
@@ -162,9 +169,9 @@ export const respondToSlackMention = inngest.createFunction(
       }
     });
 
-    await step.run("post-slack-reply", () =>
+    await step.run("post-slack-reply", async () =>
       postSlackReply({
-        token: slack.token,
+        token: await loadSlackToken(),
         channel: input.channelId,
         threadTs: input.threadTs ?? null,
         text: outcome.reply,

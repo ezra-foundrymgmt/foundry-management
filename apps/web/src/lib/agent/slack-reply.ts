@@ -34,15 +34,25 @@ export async function postSlackReply(input: {
 const resourceSchema = z.object({ idempotency_key: z.string() });
 
 /**
- * A channel is creator-facing when activation provisioned it as the creator
- * channel. Anything we cannot positively identify as internal is treated as
- * creator-facing, because the cost of guessing wrong is disclosing Foundry
- * internals to a creator.
+ * Decides whether a surface must be treated as readable by a creator.
+ *
+ * This fails CLOSED. An earlier version returned false — internal — for any
+ * channel with no provisioning record, which is every channel Foundry creates
+ * by hand, including ones a creator has been invited to. That contradicted the
+ * intent and would have let P&L-adjacent internal tools answer in a channel a
+ * creator can read.
+ *
+ * A direct message is the one surface that is positively known to be internal:
+ * it is one-to-one with a Foundry employee who is mapped in
+ * slack_user_identities. Everything else is creator-facing unless the
+ * provisioning ledger says it is the internal channel for a creator.
  */
 export async function isCreatorFacingChannel(
   organizationId: string,
   channelId: string,
+  options: { isDirectMessage?: boolean } = {},
 ): Promise<boolean> {
+  if (options.isDirectMessage) return false;
   const admin = createSupabaseAdminClient();
   if (!admin) return true;
   const { data, error } = await admin
@@ -54,7 +64,9 @@ export async function isCreatorFacingChannel(
     .maybeSingle();
   if (error) return true;
   const parsed = resourceSchema.safeParse(data);
-  // No provisioning record: an ordinary internal Foundry channel or a DM.
-  if (!parsed.success) return false;
-  return parsed.data.idempotency_key.includes(":slack:creator-channel");
+  // Unknown channel: treat as creator-readable. Guessing wrong the other way
+  // discloses Foundry internals to a creator.
+  if (!parsed.success) return true;
+  // Only a channel provisioned as the *internal* channel is known-internal.
+  return !parsed.data.idempotency_key.includes(":slack:internal-channel");
 }

@@ -154,7 +154,14 @@ export class SupabaseOnboardingRepository implements OnboardingRepository {
     if (result.error) throw new Error(`WORKFLOW_LOOKUP_FAILED: ${result.error.message}`);
     if (!result.data) return null;
     const row = workflowRunRowSchema.parse(result.data);
+    // Durable execution creates a fresh repository per step and enters through
+    // findActiveRun rather than saveRun, so the run context has to be
+    // established here too. Without it claimProvisioningKey throws
+    // WORKFLOW_RUN_CONTEXT_MISSING and every live activation dies at the first
+    // provisioning step.
+    this.currentRun = { id: row.id, creatorId: row.creator_id };
     const steps = [...row.workflow_steps].sort((a, b) => a.ordinal - b.ordinal);
+    if (steps.length === 0) throw new Error(`WORKFLOW_RUN_HAS_NO_STEPS: ${row.id}`);
     return {
       id: row.id,
       runNumber: row.run_number,
@@ -211,7 +218,13 @@ export class SupabaseOnboardingRepository implements OnboardingRepository {
       definition_id: workflowDefinition.id,
       run_number: run.runNumber,
       status: run.status,
-      idempotency_key: `creator:${run.creatorId}:activation:v1`,
+      // Per run, not per creator. workflow_runs carries an unconditional
+      // unique(organization_id, idempotency_key) covering every status, so a
+      // constant per-creator key meant a creator could be activated exactly once
+      // ever — a second activation after a completed one could not be inserted.
+      // The active-run fence is workflow_runs_one_active_creator_definition_uidx,
+      // which is partial and only covers non-terminal runs.
+      idempotency_key: run.id,
       current_step: run.steps.find((step) => step.status === "RUNNING")?.name ?? null,
       initiated_by: this.initiatedBy,
       correlation_id: run.correlationId,

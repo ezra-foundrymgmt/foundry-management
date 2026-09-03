@@ -62,8 +62,11 @@ describe("bot recursion protection", () => {
 });
 
 describe("which events the agent acts on", () => {
-  it("processes an app_mention from a human", () => {
-    expect(shouldProcessEvent(callback({}), BOT_USER_ID)).toEqual({ process: true });
+  it("processes an app_mention from a human and returns the stripped prompt", () => {
+    expect(shouldProcessEvent(callback({}), BOT_USER_ID)).toEqual({
+      process: true,
+      prompt: "status?",
+    });
   });
 
   it("processes a direct message", () => {
@@ -72,7 +75,39 @@ describe("which events the agent acts on", () => {
         callback({ type: "message", channel_type: "im", text: "how is Madison?" }),
         BOT_USER_ID,
       ),
-    ).toEqual({ process: true });
+    ).toEqual({ process: true, prompt: "how is Madison?" });
+  });
+
+  it("answers a DM that also mentions the bot exactly once", () => {
+    // Slack delivers such a message twice — once as app_mention, once as
+    // message.im — with different event_ids, so the delivery ledger cannot
+    // collapse them and the agent would reply twice.
+    const text = "<@U0BOTBOT> what is the buffer?";
+    expect(
+      shouldProcessEvent(callback({ type: "message", channel_type: "im", text }), BOT_USER_ID),
+    ).toEqual({ process: false, reason: "DUPLICATE_OF_APP_MENTION" });
+    expect(shouldProcessEvent(callback({ type: "app_mention", text }), BOT_USER_ID)).toEqual({
+      process: true,
+      prompt: "what is the buffer?",
+    });
+  });
+
+  it("skips a bare mention with nothing after it", () => {
+    // Non-empty as raw text, empty once the mention is stripped. Enqueueing it
+    // only to fail schema validation downstream tells nobody anything.
+    expect(shouldProcessEvent(callback({ text: "<@U0BOTBOT>" }), BOT_USER_ID)).toEqual({
+      process: false,
+      reason: "EMPTY_AFTER_MENTION_STRIP",
+    });
+  });
+
+  it("truncates an oversized prompt rather than rejecting it downstream", () => {
+    const decision = shouldProcessEvent(
+      callback({ type: "message", channel_type: "im", text: "x".repeat(9000) }),
+      BOT_USER_ID,
+    );
+    expect(decision.process).toBe(true);
+    expect(decision.process === true && decision.prompt.length).toBe(4000);
   });
 
   it("ignores an ordinary channel message that does not mention the agent", () => {
@@ -98,7 +133,7 @@ describe("which events the agent acts on", () => {
     });
     expect(shouldProcessEvent(callback({ text: "   " }), BOT_USER_ID)).toEqual({
       process: false,
-      reason: "EMPTY_TEXT",
+      reason: "EMPTY_AFTER_MENTION_STRIP",
     });
   });
 });
@@ -112,5 +147,12 @@ describe("mention stripping", () => {
 
   it("removes mentions that appear mid-sentence", () => {
     expect(stripMention("hey <@U0BOTBOT> how is <@U0OTHER> doing")).toBe("hey how is doing");
+  });
+
+  it("removes Slack's labelled mention form", () => {
+    // Link-formatted payloads carry <@U123|display-name>; the unlabelled-only
+    // pattern left that markup in the prompt the model receives.
+    expect(stripMention("<@U0BOTBOT|foundry> what is the buffer?")).toBe("what is the buffer?");
+    expect(stripMention("ask <@U0OTHER|jane.doe> about it")).toBe("ask about it");
   });
 });

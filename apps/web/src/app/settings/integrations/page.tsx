@@ -1,3 +1,5 @@
+import { AccessDenied } from "@/components/access-denied";
+import { authorizePage } from "@/lib/page-access";
 import {
   Braces,
   CheckCircle2,
@@ -10,7 +12,6 @@ import {
 import { DemoStrip, PageHeader } from "@/components/page-header";
 import { IntegrationControl } from "@/components/integration-control";
 import { StatusBadge } from "@/components/status-badge";
-import { getSession } from "@/lib/auth";
 import { isMockMode } from "@/lib/environment";
 import { listIntegrationConnections } from "@/lib/integration-registry";
 
@@ -27,12 +28,18 @@ interface ConnectionRecord {
 }
 
 export default async function IntegrationSettingsPage() {
+  // This page reads tenant integration records through the service-role client,
+  // which bypasses RLS, so the role check has to happen here — being signed in
+  // is not enough to see which providers a tenant has connected.
+  const access = await authorizePage("integration.read");
+  if (!access.allowed)
+    return (
+      <AccessDenied title="Integrations" permission="integration.read" reason={access.reason} />
+    );
   const mock = isMockMode();
-  const session = await getSession();
-  const records =
-    !mock && session
-      ? ((await listIntegrationConnections(session.organizationId)) as ConnectionRecord[])
-      : [];
+  const records = mock
+    ? []
+    : ((await listIntegrationConnections(access.session.organizationId)) as ConnectionRecord[]);
   const find = (provider: string) => records.find((item) => item.provider === provider);
   const slack = find("SLACK");
   const notion = find("NOTION");
