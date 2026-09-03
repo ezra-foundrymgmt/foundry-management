@@ -1,10 +1,17 @@
 import { Inngest, NonRetriableError } from "inngest";
 import { z } from "zod";
-import { reports } from "@creatoros/domain";
 import { ACTIVATION_STEPS, type WorkflowRun } from "@creatoros/workflows";
 import { createLiveOnboardingService, loadLiveOnboardingCreator } from "@/lib/live-onboarding";
+import { produceDailyCreatorReport } from "@/lib/daily-report";
+import { logEvent } from "@/lib/observability";
 
 export const inngest = new Inngest({ id: "creatoros" });
+
+const reportEventSchema = z.object({
+  organizationId: z.string().uuid(),
+  creatorId: z.string().uuid(),
+  reportDate: z.string().optional(),
+});
 
 const activationEventSchema = z.object({
   organizationId: z.string().uuid(),
@@ -19,17 +26,41 @@ export const generateDailyCreatorReport = inngest.createFunction(
     triggers: [{ event: "creator.daily-report.requested" }],
   },
   async ({ event, step }) => {
-    const creatorId = String(event.data["creatorId"] ?? "");
-    const report = await step.run(
-      "run-rules-diagnostic",
-      () => reports.find((item) => item.creatorId === creatorId) ?? null,
+    const parsed = reportEventSchema.safeParse(event.data);
+    if (!parsed.success) throw new NonRetriableError("INVALID_REPORT_EVENT");
+    const { organizationId, creatorId, reportDate } = parsed.data;
+
+    // Reads real metrics and the creator's own frozen baseline. It refuses to
+    // produce a report when there is no baseline or no data rather than
+    // emitting one whose every comparison would be invented.
+    const outcome = await step.run("run-rules-diagnostic", () =>
+      produceDailyCreatorReport({
+        organizationId,
+        creatorId,
+        ...(reportDate ? { reportDate } : {}),
+      }),
     );
-    if (!report) throw new NonRetriableError("CREATOR_REPORT_INPUT_NOT_FOUND");
+
+    if (!outcome.produced) {
+      logEvent("info", "creator.daily_report.skipped", {
+        organizationId,
+        creatorId,
+        reason: outcome.reason,
+      });
+      return { creatorId, status: "SKIPPED", reason: outcome.reason };
+    }
+
     await step.sendEvent("emit-report-generated", {
       name: "creator.report.generated",
-      data: { creatorId, reportId: report.id, provider: "RULES" },
+      data: { organizationId, creatorId, reportId: outcome.reportId, provider: "RULES" },
     });
-    return { reportId: report.id, creatorId, status: "READY" };
+    return {
+      reportId: outcome.reportId,
+      creatorId,
+      reportDate: outcome.reportDate,
+      ruleId: outcome.ruleId,
+      status: "READY",
+    };
   },
 );
 
