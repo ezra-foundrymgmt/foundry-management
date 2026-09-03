@@ -1,5 +1,6 @@
 import "server-only";
 import { z } from "zod";
+import { WORK_PRIORITIES } from "@creatoros/domain";
 import { getSession } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
@@ -14,6 +15,7 @@ const creatorRowsSchema = z.array(
     current_content_buffer_days: z.coerce.number().nullable(),
     assigned_creator_success_user_id: z.string().uuid().nullable(),
     assigned_growth_user_id: z.string().uuid().nullable(),
+    priority: z.string().nullable(),
   }),
 );
 const prospectRowsSchema = z.array(
@@ -83,6 +85,8 @@ export interface LiveCreatorRow {
   contentBufferDays: number | null;
   owner: string | null;
   integrationHealth: string;
+  /** Null means nobody has triaged this creator yet, not that it is low. */
+  priority: string | null;
 }
 
 export interface LiveProspectRow {
@@ -159,12 +163,31 @@ export async function getLiveTeamMembers(): Promise<LiveTeamMember[]> {
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
+/**
+ * Orders the roster the way an operator triages: most urgent first.
+ *
+ * `creators.priority` had a write surface and a dedicated index
+ * (`creators_org_priority_idx`) from the day it was added, and no read path
+ * ever selected it -- a founder recorded "this is the creator to worry about
+ * this week" and the roster went on listing alphabetically. Untriaged sorts
+ * last rather than first: no decision is not the same as low urgency, but it
+ * is also not a reason to head the list.
+ */
+function byOperationalPriority(left: LiveCreatorRow, right: LiveCreatorRow): number {
+  const rank = (value: string | null) => {
+    const index = (WORK_PRIORITIES as readonly string[]).indexOf(value ?? "");
+    return index === -1 ? WORK_PRIORITIES.length : index;
+  };
+  const difference = rank(left.priority) - rank(right.priority);
+  return difference !== 0 ? difference : left.stageName.localeCompare(right.stageName);
+}
+
 export async function getLiveCreators(): Promise<LiveCreatorRow[]> {
   const { session, client } = await context();
   const { data, error } = await client
     .from("creators")
     .select(
-      "id,creator_number,stage_name,status,current_health_score,current_health_status,current_content_buffer_days,assigned_creator_success_user_id,assigned_growth_user_id",
+      "id,creator_number,stage_name,status,current_health_score,current_health_status,current_content_buffer_days,assigned_creator_success_user_id,assigned_growth_user_id,priority",
     )
     .eq("organization_id", session.organizationId)
     .is("archived_at", null)
@@ -243,8 +266,10 @@ export async function getLiveCreators(): Promise<LiveCreatorRow[]> {
         owners.get(row.assigned_growth_user_id ?? "") ??
         null,
       integrationHealth: healthFor(row.id),
+      priority: row.priority,
     };
-  });
+  })
+  .sort(byOperationalPriority);
 }
 
 export async function getLiveProspects(): Promise<LiveProspectRow[]> {

@@ -50,7 +50,33 @@ export async function GET() {
     ]);
     if (result.error) throw new Error(result.error.message);
     if (creatorResult.error) throw new Error(creatorResult.error.message);
-    const tasks = rowsSchema.parse(result.data ?? []).map((row) => ({
+    const taskRows = rowsSchema.parse(result.data ?? []);
+
+    // Real names, not the literal string "Assigned user". A task list that
+    // cannot say who owns a task is the same as an unowned task list.
+    // Resolved before the mapping below uses it.
+    const ownerIds = [
+      ...new Set(
+        taskRows.map((row) => row.owner_user_id).filter((id): id is string => typeof id === "string"),
+      ),
+    ];
+    const ownerNames = new Map<string, string>();
+    if (ownerIds.length > 0) {
+      const owners = await client.from("users").select("id,display_name,email").in("id", ownerIds);
+      if (owners.error) throw new Error(owners.error.message);
+      for (const owner of z
+        .array(
+          z.object({
+            id: z.string().uuid(),
+            display_name: z.string().nullable(),
+            email: z.string(),
+          }),
+        )
+        .parse(owners.data ?? []))
+        ownerNames.set(owner.id, owner.display_name ?? owner.email);
+    }
+
+    const tasks = taskRows.map((row) => ({
       id: row.id,
       creatorId: row.creator_id,
       creatorName: row.creators?.stage_name ?? "Foundry",
@@ -62,7 +88,8 @@ export async function GET() {
       department: row.department ?? DEFAULT_DEPARTMENT,
       priority: row.priority ?? DEFAULT_PRIORITY,
       status: row.status,
-      owner: row.owner_user_id ? "Assigned user" : "Unassigned",
+      ownerUserId: row.owner_user_id,
+      owner: row.owner_user_id ? (ownerNames.get(row.owner_user_id) ?? "Unknown user") : "Unassigned",
       dueAt: row.due_at ? new Date(row.due_at).toLocaleDateString() : "Unscheduled",
       sourceType: row.source_type ?? "MANUAL",
       sourceId: row.source_id,
@@ -72,7 +99,36 @@ export async function GET() {
       .array(z.object({ id: z.string().uuid(), stage_name: z.string() }))
       .parse(creatorResult.data ?? [])
       .map((row) => ({ id: row.id, name: row.stage_name }));
-    return NextResponse.json({ data: tasks, creators });
+    // The create form needs someone to assign to. Active members only: a
+    // deactivated colleague is not a valid owner.
+    const memberships = await client
+      .from("organization_memberships")
+      .select("user_id")
+      .eq("organization_id", session.organizationId)
+      .eq("active", true);
+    if (memberships.error) throw new Error(memberships.error.message);
+    const memberIds = z
+      .array(z.object({ user_id: z.string().uuid() }))
+      .parse(memberships.data ?? [])
+      .map((row) => row.user_id);
+    const team: Array<{ id: string; name: string }> = [];
+    if (memberIds.length > 0) {
+      const people = await client.from("users").select("id,display_name,email").in("id", memberIds);
+      if (people.error) throw new Error(people.error.message);
+      for (const person of z
+        .array(
+          z.object({
+            id: z.string().uuid(),
+            display_name: z.string().nullable(),
+            email: z.string(),
+          }),
+        )
+        .parse(people.data ?? []))
+        team.push({ id: person.id, name: person.display_name ?? person.email });
+      team.sort((left, right) => left.name.localeCompare(right.name));
+    }
+
+    return NextResponse.json({ data: tasks, creators, team });
   } catch (error) {
     if (error instanceof AuthorizationError)
       return NextResponse.json({ error: error.message }, { status: error.status });

@@ -16,14 +16,16 @@ export default function TasksPage() {
   const demo = useDemoMode();
   const [tasks, setTasks] = useState<DisplayTask[]>(demo ? seededTasks : []);
   const [creatorOptions, setCreatorOptions] = useState<TaskCreatorOption[]>([]);
+  const [team, setTeam] = useState<Array<{ id: string; name: string }>>([]);
   const [message, setMessage] = useState("");
   useEffect(() => {
     if (!demo)
       void fetch("/api/tasks")
         .then((response) => response.json())
-        .then((body: { data?: DisplayTask[]; creators?: TaskCreatorOption[] }) => {
+        .then((body: { data?: DisplayTask[]; creators?: TaskCreatorOption[]; team?: Array<{ id: string; name: string }> }) => {
           setTasks(body.data ?? []);
           setCreatorOptions(body.creators ?? []);
+          setTeam(body.team ?? []);
         });
   }, [demo]);
   type PatchResult = { status?: Task["status"]; priority?: Task["priority"]; updatedAt?: string };
@@ -126,7 +128,7 @@ export default function TasksPage() {
               Create task
             </button>
           ) : (
-            <TaskCreateForm creators={creatorOptions} onCreated={onCreated} />
+            <TaskCreateForm creators={creatorOptions} team={team} onCreated={onCreated} />
           )
         }
       />

@@ -205,3 +205,60 @@ describe("selected columns exist on the tables they are selected from", () => {
     }
   });
 });
+
+/**
+ * `creators.priority` had a write surface, a dedicated index
+ * (`creators_org_priority_idx`) and no reader: a founder recorded which
+ * creator to worry about and every list went on ordering alphabetically.
+ */
+describe("creator priority is load-bearing", () => {
+  function creatorRow(id: string, stageName: string, priority: string | null) {
+    return {
+      id,
+      creator_number: `CR-${id.slice(0, 6)}`,
+      stage_name: stageName,
+      status: "ACTIVE",
+      current_health_score: null,
+      current_health_status: null,
+      current_content_buffer_days: null,
+      assigned_creator_success_user_id: null,
+      assigned_growth_user_id: null,
+      priority,
+    };
+  }
+
+  it("orders the roster by triage, then by name, with untriaged last", async () => {
+    const rows = [
+      creatorRow("aaaaaaaa-1111-4111-8111-111111111111", "Zoe Low", "LOW"),
+      creatorRow("bbbbbbbb-2222-4222-8222-222222222222", "Ada Untriaged", null),
+      creatorRow("cccccccc-3333-4333-8333-333333333333", "Mia Critical", "CRITICAL"),
+      creatorRow("dddddddd-4444-4444-8444-444444444444", "Bea High", "HIGH"),
+    ];
+    const chain: Record<string, unknown> = {};
+    for (const op of ["select", "eq", "is", "order", "in", "gte", "limit"]) chain[op] = () => chain;
+    chain["then"] = (resolve: (value: unknown) => unknown) =>
+      resolve({ data: rows, error: null, count: rows.length });
+    adminClient = {
+      from: (table: string) => (table === "creators" ? chain : emptyChain()),
+    };
+
+    const roster = await liveData.getLiveCreators();
+
+    expect(roster.map((entry) => entry.stageName)).toEqual([
+      "Mia Critical",
+      "Bea High",
+      "Zoe Low",
+      "Ada Untriaged",
+    ]);
+    // And the value itself reaches the caller, not just the ordering.
+    expect(roster[0]?.priority).toBe("CRITICAL");
+  });
+
+  function emptyChain() {
+    const chain: Record<string, unknown> = {};
+    for (const op of ["select", "eq", "is", "order", "in", "gte", "limit"]) chain[op] = () => chain;
+    chain["then"] = (resolve: (value: unknown) => unknown) =>
+      resolve({ data: [], error: null, count: 0 });
+    return chain;
+  }
+});

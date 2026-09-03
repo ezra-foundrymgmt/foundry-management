@@ -72,6 +72,8 @@ export default async function CommandCenterPage() {
       contentBufferDays: creator.contentBufferDays,
       owner: creator.owner,
       integrationHealth: creator.integrationHealth,
+      // Fixtures carry no triage decision; untriaged is the honest value.
+      priority: null,
     }));
     bottlenecks = new Map(
       demoReports.map((report) => [report.creatorId, report.primaryBottleneck]),
@@ -117,8 +119,22 @@ export default async function CommandCenterPage() {
 
   const totalRevenue = sumOrNull(creators.map((creator) => creator.monthlyRevenue));
   const portfolioHealth = averageOrNull(creators.map((creator) => creator.healthScore));
+  /**
+   * Who the founder should look at first.
+   *
+   * Health was the only input, and `current_health_status` has no writer, so
+   * every creator reads UNKNOWN and this list was structurally always empty --
+   * the panel could never appear. Human triage is the one signal that is
+   * genuinely populated today, so a creator someone marked CRITICAL or HIGH
+   * belongs here on that basis alone. Health still counts once it is computed;
+   * this does not replace it, it stops the list depending on a column nothing
+   * writes.
+   */
+  const urgentlyTriaged = new Set(["CRITICAL", "HIGH"]);
   const needAttention = creators.filter(
-    (creator) => creator.healthBand !== "GREEN" && creator.healthBand !== "UNKNOWN",
+    (creator) =>
+      (creator.healthBand !== "GREEN" && creator.healthBand !== "UNKNOWN") ||
+      urgentlyTriaged.has(creator.priority ?? ""),
   );
   const lowBuffers = creators.filter(
     (creator) => creator.contentBufferDays !== null && creator.contentBufferDays < 10,
@@ -193,6 +209,9 @@ export default async function CommandCenterPage() {
                         <span>Health</span>
                         <strong>{formatScore(creator.healthScore)}</strong>
                       </div>
+                      {/* Why this creator is on the list. Until health is
+                          computed, triage is usually the reason. */}
+                      {creator.priority ? <StatusBadge value={creator.priority} /> : null}
                       <StatusBadge value={creator.healthBand} />
                       <ArrowRight size={15} />
                     </Link>

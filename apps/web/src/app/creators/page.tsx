@@ -19,7 +19,9 @@ export default async function CreatorsPage() {
   const access = await authorizePage("creator.read");
   if (!access.allowed)
     return <AccessDenied title="Creators" permission="creator.read" reason={access.reason} />;
-  const creatorRecords = isMockMode() ? creators : await getLiveCreators();
+  const creatorRecords = isMockMode()
+    ? creators.map((creator) => ({ ...creator, priority: null as string | null }))
+    : await getLiveCreators();
   return (
     <main className="page">
       <DemoStrip />
@@ -49,6 +51,7 @@ export default async function CreatorsPage() {
             <thead>
               <tr>
                 <th>Creator</th>
+                <th>Priority</th>
                 <th>Status</th>
                 <th>Monthly receipts</th>
                 <th>30d trend</th>
@@ -69,6 +72,15 @@ export default async function CreatorsPage() {
                         {creator.creatorNumber}
                       </span>
                     </Link>
+                  </td>
+                  <td>
+                    {/* Ordered by this column: the roster now leads with what
+                        a person actually triaged. */}
+                    {creator.priority ? (
+                      <StatusBadge value={creator.priority} />
+                    ) : (
+                      <span style={{ fontSize: 10, color: "var(--ink-soft)" }}>Not triaged</span>
+                    )}
                   </td>
                   <td>
                     <StatusBadge value={creator.status} />

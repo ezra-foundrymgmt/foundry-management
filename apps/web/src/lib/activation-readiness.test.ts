@@ -227,3 +227,84 @@ describe("activation readiness", () => {
     expect(readiness.checks.filter((entry) => entry.satisfied)).toHaveLength(6);
   });
 });
+
+/**
+ * Each gate must fail for its own reason, not merely fail.
+ *
+ * These are the five prerequisites that had no supported writer until this
+ * work: a creator converted from a prospect arrived with no owner, no
+ * boundaries, jurisdiction PENDING, adult confirmation NOT_STARTED and no
+ * baseline, and nothing in the product could change any of them. A gate that
+ * fails for the wrong reason sends an operator to fix the wrong thing, so the
+ * reason is the part worth pinning.
+ */
+describe("activation gate negative cases", () => {
+  const cases: Array<{
+    name: string;
+    arrange: () => void;
+    status: "BLOCKED" | "WAITING";
+    reason: string;
+  }> = [
+    {
+      name: "no assigned owner",
+      arrange: () => {
+        creatorRow = eligibleCreator({
+          assigned_creator_success_user_id: null,
+          assigned_growth_user_id: null,
+        });
+      },
+      status: "BLOCKED",
+      reason: "Assigned Foundry owner",
+    },
+    {
+      name: "no boundaries recorded",
+      arrange: () => counts.set("creator_boundaries|active=true", 0),
+      status: "BLOCKED",
+      reason: "Creator boundaries",
+    },
+    {
+      name: "jurisdiction review unresolved",
+      arrange: () => {
+        creatorRow = eligibleCreator({ jurisdiction_review_status: "PENDING" });
+      },
+      status: "BLOCKED",
+      reason: "Jurisdiction review",
+    },
+    {
+      name: "adult confirmation missing",
+      arrange: () => {
+        creatorRow = eligibleCreator({ adult_confirmation_status: "NOT_STARTED" });
+      },
+      status: "BLOCKED",
+      reason: "Adult confirmation",
+    },
+    {
+      name: "no frozen baseline",
+      arrange: () => counts.set("creator_baselines", 0),
+      status: "WAITING",
+      reason: "Frozen baseline",
+    },
+  ];
+
+  for (const testCase of cases) {
+    it(`refuses activation for the right reason: ${testCase.name}`, async () => {
+      testCase.arrange();
+
+      const readiness = await evaluate();
+
+      expect(readiness.status).toBe(testCase.status);
+      expect(readiness.reasons.join(" ")).toContain(testCase.reason);
+      // Not READY, and specifically not satisfied on the check under test.
+      expect(readiness.checks.some((entry) => !entry.satisfied)).toBe(true);
+    });
+  }
+
+  it("reaches READY once all five are satisfied together", async () => {
+    // The positive counterpart: the same evaluator that refused each case
+    // above accepts when every one has been legitimately completed.
+    const readiness = await evaluate();
+
+    expect(readiness.status).toBe("READY");
+    expect(readiness.reasons).toEqual([]);
+  });
+});

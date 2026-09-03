@@ -43,9 +43,11 @@ const MESSAGES: Record<string, string> = {
  */
 export function TaskCreateForm({
   creators,
+  team,
   onCreated,
 }: {
   creators: TaskCreatorOption[];
+  team: Array<{ id: string; name: string }>;
   onCreated: (task: CreatedTask) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -53,6 +55,9 @@ export function TaskCreateForm({
   const [department, setDepartment] = useState<string>("Operations");
   const [priority, setPriority] = useState<string>("MEDIUM");
   const [creatorId, setCreatorId] = useState("");
+  // Unassigned is a legitimate choice, so this starts empty rather than
+  // defaulting to whoever happens to be first in the roster.
+  const [ownerUserId, setOwnerUserId] = useState("");
   const [dueAt, setDueAt] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -68,6 +73,7 @@ export function TaskCreateForm({
         department,
         priority,
         creatorId: creatorId === "" ? null : creatorId,
+        ownerUserId: ownerUserId === "" ? null : ownerUserId,
         // A date input gives a calendar day with no timezone of its own; the API
         // wants an instant. Anchoring at noon UTC — rather than the browser's
         // local noon — keeps the stored date matching what was picked regardless
@@ -152,6 +158,21 @@ export function TaskCreateForm({
           {creators.map((creator) => (
             <option key={creator.id} value={creator.id}>
               {creator.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label style={{ display: "grid", gap: 4, fontSize: 11 }}>
+        Owner (optional)
+        <select
+          className="input"
+          value={ownerUserId}
+          onChange={(event) => setOwnerUserId(event.target.value)}
+        >
+          <option value="">Unassigned</option>
+          {team.map((member) => (
+            <option key={member.id} value={member.id}>
+              {member.name}
             </option>
           ))}
         </select>
