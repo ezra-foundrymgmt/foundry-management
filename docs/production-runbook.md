@@ -24,7 +24,9 @@ Slack OAuth redirect URLs:
 - staging: `https://<staging-domain>/api/integrations/slack/callback`
 - production: `https://<production-domain>/api/integrations/slack/callback`
 
-Required Slack bot scopes are `channels:manage`, `channels:read`, `groups:write`, `groups:read`, `chat:write`, and `users:read`. No message-history scope is requested.
+Required Slack bot scopes for channel provisioning are `channels:manage`, `channels:read`, `groups:write`, `groups:read`, `chat:write`, and `users:read`.
+
+The Foundry agent additionally needs `app_mentions:read`, `im:read`, `im:write`, and `im:history`. `im:history` is a genuine expansion of access and is required only for direct messages — the agent reads the message text Slack delivers in the event payload and never calls a history API. Omit it if you do not want DM support; `@Foundry` mentions in channels still work.
 
 Notion OAuth redirect URLs:
 
@@ -41,7 +43,9 @@ Creator activation uses both an event ID and a function idempotency expression. 
 
 ## Vercel
 
-Create a Vercel project with Root Directory `apps/web`. The checked-in `vercel.json` installs from the workspace root and builds only `@creatoros/web`. Configure environment values in Vercel rather than files. Add the custom domain only after the preview deployment passes all gates.
+Set Root Directory to the **repository root**, not `apps/web`. There is one `vercel.json`, at the root; it installs the workspace and builds only `@creatoros/web` with `outputDirectory` `apps/web/.next`. Pointing Root Directory at `apps/web` puts the workspace packages above the build root and breaks it. Configure environment values in Vercel rather than files. Add the custom domain only after the preview deployment passes all gates.
+
+Set `PRODUCTION_SUPABASE_PROJECT_REF` in every environment. Any deployment that is not genuinely production and resolves to that project fails `validate-env.mjs` and refuses to construct a service-role client, which is what keeps a branch preview from mutating real creator records.
 
 ## PWA installation
 
@@ -50,3 +54,35 @@ CreatorOS publishes a web manifest, 192px and 512px branded icons, and a minimal
 ## Rotation and rollback
 
 Rotate every credential that has appeared in chat or terminal history before production cutover. Provider credential rows are encrypted, but the source credentials must still be treated as exposed. Roll back application code through Vercel. Do not roll back schema by deleting production data; apply a forward corrective migration.
+
+## Recovery
+
+**None of these procedures has been rehearsed.** They are written from how the system is built, not from a drill. Treat the first real incident as the rehearsal, and correct this file afterwards.
+
+### Bad application deploy
+
+Vercel → Deployments → last known good → **Promote to Production**. Code rollback does not roll back the database; migrations are forward-only. If the bad deploy also shipped a migration, write a corrective migration rather than reverting the schema.
+
+### Database problem
+
+Supabase point-in-time recovery is whatever the project's plan provides — **confirm what your plan actually retains before you need it.** There is no CreatorOS-managed backup. For a bad data change rather than a lost database, prefer a targeted corrective UPDATE: `audit_events` is append-only and will show who changed what and under which correlation id.
+
+### Integration outage (Slack or Notion down)
+
+Activation steps fail and the run is marked FAILED with the failing step and error recorded. External resources already provisioned keep their ids. Recover with `POST /api/workflows/resume` once the provider is back; completed steps are skipped and only the failed step retries. No manual cleanup is needed.
+
+### Lost Slack authorization
+
+A revoked token makes health checks set `needs_reauthorization`, which makes the stored token unusable — deliberately, so nothing keeps trying with a dead credential. Recover through **Settings → Integrations → Slack → Reauthorize**. The new bot token replaces the old row. A merely DEGRADED connection (a transient failure) stays usable and recovers on its own.
+
+### Notion page deleted
+
+Page ids live in `provisioned_resources`. If someone deletes a creator hub in Notion, the stored id now points at nothing and updates fail. Delete that `provisioned_resources` row for the creator's `creator:<id>:notion:creator-hub:v1` key, then resume activation; a fresh hub is created and the new id stored. Do not edit the id by hand.
+
+### Workflow stuck
+
+Check `workflow_runs` for the creator. `WAITING_EXTERNAL` means baseline data has not arrived — that is correct behaviour, not a fault. `FAILED` means a step errored; read `workflow_steps.error_message`, fix the cause, then resume. Only one non-terminal run per creator can exist, so a stuck run must be resumed or cancelled before a new one can start.
+
+### Accidental record change
+
+Query `audit_events` filtered by `resource_id` and `created_at` to establish who changed what. The table is append-only: UPDATE and DELETE raise, and TRUNCATE is blocked by a statement-level trigger, so the trail cannot be edited to hide a change — including by anything holding the service role.
