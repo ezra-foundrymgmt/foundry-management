@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { AuthorizationError, requirePermission } from "@/lib/auth";
 import { allowRequest } from "@/lib/rate-limit";
 import { isMockMode } from "@/lib/environment";
-import { getCorrelationId, logEvent } from "@/lib/observability";
+import { captureException, getCorrelationId, logEvent } from "@/lib/observability";
 import { createProspect, ProspectError, prospectCreateSchema } from "@/lib/prospects";
 
 export async function POST(request: Request) {
@@ -33,10 +33,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: error.message }, { status: error.status });
     if (error instanceof ProspectError)
       return NextResponse.json({ error: error.message }, { status: error.status });
-    logEvent("error", "prospect.create_failed", {
-      correlationId,
-      error: error instanceof Error ? error.message : "UNKNOWN",
-    });
+    captureException(error, { correlationId, event: "prospect.create_failed" });
     return NextResponse.json({ error: "PROSPECT_CREATE_FAILED" }, { status: 500 });
   }
 }

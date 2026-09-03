@@ -3,7 +3,7 @@ import { z } from "zod";
 import { AuthorizationError, requirePermission } from "@/lib/auth";
 import { allowRequest } from "@/lib/rate-limit";
 import { isMockMode } from "@/lib/environment";
-import { getCorrelationId, logEvent } from "@/lib/observability";
+import { captureException, getCorrelationId, logEvent } from "@/lib/observability";
 import {
   addProspectActivity,
   listProspectActivities,
@@ -64,10 +64,7 @@ export async function POST(request: Request, context: { params: Promise<{ prospe
       return NextResponse.json({ error: error.message }, { status: error.status });
     if (error instanceof ProspectError)
       return NextResponse.json({ error: error.message }, { status: error.status });
-    logEvent("error", "prospect.activity_failed", {
-      correlationId,
-      error: error instanceof Error ? error.message : "UNKNOWN",
-    });
+    captureException(error, { correlationId, event: "prospect.activity_failed" });
     return NextResponse.json({ error: "ACTIVITY_CREATE_FAILED" }, { status: 500 });
   }
 }

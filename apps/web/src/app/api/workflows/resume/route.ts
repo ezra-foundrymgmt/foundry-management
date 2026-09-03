@@ -5,7 +5,7 @@ import { allowRequest } from "@/lib/rate-limit";
 import { isMockMode } from "@/lib/environment";
 import { inngest } from "@/lib/inngest";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { getCorrelationId, logEvent } from "@/lib/observability";
+import { captureException, getCorrelationId, logEvent } from "@/lib/observability";
 
 const schema = z.object({ creatorId: z.string().uuid() });
 
@@ -75,10 +75,7 @@ export async function POST(request: Request) {
       { status: 202 },
     );
   } catch (error) {
-    logEvent("error", "creator.activation.resume_failed", {
-      correlationId,
-      error: error instanceof Error ? error.message : "UNKNOWN",
-    });
+    captureException(error, { correlationId, event: "creator.activation.resume_failed" });
     if (error instanceof AuthorizationError)
       return NextResponse.json({ error: error.message }, { status: error.status });
     return NextResponse.json({ error: "WORKFLOW_RESUME_FAILED" }, { status: 500 });

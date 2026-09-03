@@ -6,7 +6,7 @@ import { onboardingCreators, onboardingService } from "@/lib/onboarding";
 import { isMockMode } from "@/lib/environment";
 import { inngest } from "@/lib/inngest";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { getCorrelationId, logEvent } from "@/lib/observability";
+import { captureException, getCorrelationId, logEvent } from "@/lib/observability";
 const schema = z.object({ creatorId: z.string().min(1).max(100) });
 export async function POST(request: Request) {
   const requestCorrelationId = getCorrelationId(request);
@@ -67,12 +67,14 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
-    logEvent("error", "creator.activation.request_failed", {
-      correlationId: requestCorrelationId,
-      error: error instanceof Error ? error.message : "UNKNOWN",
-    });
+    // A denied permission is an expected outcome, not an exception: reporting it
+    // would fill the error channel with normal authorization traffic.
     if (error instanceof AuthorizationError)
       return NextResponse.json({ error: error.message }, { status: error.status });
+    captureException(error, {
+      correlationId: requestCorrelationId,
+      event: "creator.activation.request_failed",
+    });
     return NextResponse.json({ error: "ONBOARDING_START_FAILED" }, { status: 500 });
   }
 }

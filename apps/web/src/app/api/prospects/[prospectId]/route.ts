@@ -3,7 +3,7 @@ import { z } from "zod";
 import { AuthorizationError, requirePermission } from "@/lib/auth";
 import { allowRequest } from "@/lib/rate-limit";
 import { isMockMode } from "@/lib/environment";
-import { getCorrelationId, logEvent } from "@/lib/observability";
+import { captureException, getCorrelationId, logEvent } from "@/lib/observability";
 import { ProspectError, prospectUpdateSchema, updateProspect } from "@/lib/prospects";
 
 const idSchema = z.string().uuid();
@@ -45,10 +45,7 @@ export async function PATCH(
       return NextResponse.json({ error: error.message }, { status: error.status });
     if (error instanceof ProspectError)
       return NextResponse.json({ error: error.message }, { status: error.status });
-    logEvent("error", "prospect.update_failed", {
-      correlationId,
-      error: error instanceof Error ? error.message : "UNKNOWN",
-    });
+    captureException(error, { correlationId, event: "prospect.update_failed" });
     return NextResponse.json({ error: "PROSPECT_UPDATE_FAILED" }, { status: 500 });
   }
 }
