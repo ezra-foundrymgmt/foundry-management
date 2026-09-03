@@ -73,6 +73,82 @@ describe("CREATOR_ACTIVATION_V1", () => {
     );
   });
 
+  it("keeps waiting when a resume arrives while baseline data is still missing", async () => {
+    // Regression: the executor skipped any step already marked WAITING_EXTERNAL,
+    // so a resume walked straight past the baseline gate and reported SUCCEEDED
+    // for a creator whose baseline had never been imported. Unknown must stay
+    // unknown however many times the workflow is resumed.
+    const { service } = setup();
+    const waiting = await service.start(madison);
+    expect(waiting.status).toBe("WAITING_EXTERNAL");
+
+    const stillWaiting = await service.resume(waiting, { ...madison, baselineReady: false });
+    expect(stillWaiting.status).toBe("WAITING_EXTERNAL");
+    expect(stillWaiting.steps.find((step) => step.name === "COMPLETE_ACTIVATION")?.status).toBe(
+      "PENDING",
+    );
+
+    const twiceWaiting = await service.resume(stillWaiting, { ...madison, baselineReady: false });
+    expect(twiceWaiting.status).toBe("WAITING_EXTERNAL");
+    expect(twiceWaiting.steps.find((step) => step.name === "COMPLETE_ACTIVATION")?.status).toBe(
+      "PENDING",
+    );
+
+    const completed = await service.resume(twiceWaiting, { ...madison, baselineReady: true });
+    expect(completed.status).toBe("SUCCEEDED");
+    expect(completed.steps.find((step) => step.name === "COMPLETE_ACTIVATION")?.status).toBe(
+      "SUCCEEDED",
+    );
+  });
+
+  it("advances exactly one step per call so a durable executor can checkpoint", async () => {
+    const { service, repository } = setup();
+    let run = await repository.findActiveRun(madison.id);
+    expect(run).toBeNull();
+
+    // start() would run to completion; drive the same machine one step at a time.
+    const started = await service.start({ ...madison, baselineReady: true });
+    expect(started.status).toBe("SUCCEEDED");
+
+    const fresh = setup();
+    let stepwise = await fresh.service.start({ ...madison, id: "stepwise", baselineReady: false });
+    expect(stepwise.status).toBe("WAITING_EXTERNAL");
+    const succeededBefore = stepwise.steps.filter((step) => step.status === "SUCCEEDED").length;
+    stepwise = await fresh.service.advance(stepwise, {
+      ...madison,
+      id: "stepwise",
+      baselineReady: true,
+    });
+    expect(stepwise.steps.filter((step) => step.status === "SUCCEEDED").length).toBe(
+      succeededBefore + 1,
+    );
+    run = stepwise;
+    expect(run.status).toBe("RUNNING");
+  });
+
+  it("does not re-run a provisioning step that already succeeded when advancing", async () => {
+    class CountingSlackProvider extends MockSlackProvider {
+      attempts = 0;
+      override createChannel(input: Parameters<MockSlackProvider["createChannel"]>[0]) {
+        this.attempts += 1;
+        return super.createChannel(input);
+      }
+    }
+    const slack = new CountingSlackProvider();
+    const service = new OnboardingService(new MemoryOnboardingRepository(), {
+      slack,
+      notion: new MockNotionProvider(),
+      files: new MockFileStorageProvider(),
+    });
+    let run = await service.start({ ...madison, baselineReady: true });
+    expect(run.status).toBe("SUCCEEDED");
+    expect(slack.attempts).toBe(2);
+    // Advancing a completed run is a no-op, not a second round of provisioning.
+    run = await service.advance(run, { ...madison, baselineReady: true });
+    expect(run.status).toBe("SUCCEEDED");
+    expect(slack.attempts).toBe(2);
+  });
+
   it("blocks before partial provisioning when prerequisites are missing", async () => {
     const { service } = setup();
     const blocked = await service.start({

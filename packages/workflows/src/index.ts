@@ -164,37 +164,53 @@ export class OnboardingService {
     private readonly providers: OnboardingProviders,
   ) {}
 
+  /**
+   * Creates (or returns) the active run without executing any step. Durable
+   * executors need this separately from start() so run creation is its own
+   * checkpoint and the steps that follow are each checkpointed individually.
+   */
+  async createRun(creator: OnboardingCreator): Promise<WorkflowRun> {
+    return this.repository.withCreatorLock(creator.id, () => this.#createRunLocked(creator));
+  }
+
   async start(creator: OnboardingCreator): Promise<WorkflowRun> {
     return this.repository.withCreatorLock(creator.id, async () => {
-      const existing = await this.repository.findActiveRun(creator.id);
-      if (existing) return existing;
-      const blockers = this.#prerequisiteBlockers(creator);
-      const now = new Date().toISOString();
-      const run: WorkflowRun = {
-        id: crypto.randomUUID(),
-        runNumber: `ONB-${new Date().getUTCFullYear()}-${creator.creatorNumber.slice(3).padStart(6, "0")}`,
-        creatorId: creator.id,
-        workflow: "CREATOR_ACTIVATION_V1",
-        status: blockers.length > 0 ? "BLOCKED" : "RUNNING",
-        createdAt: now,
-        completedAt: null,
-        correlationId: crypto.randomUUID(),
-        blockers,
-        steps: ACTIVATION_STEPS.map((name) => ({
-          name,
-          status: "PENDING",
-          attempts: 0,
-          startedAt: null,
-          completedAt: null,
-          error: null,
-          provider: null,
-          externalId: null,
-        })),
-      };
-      await this.repository.saveRun(run);
-      if (blockers.length > 0) return run;
+      const run = await this.#createRunLocked(creator);
+      if (run.blockers.length > 0) return run;
+      const existingSucceeded = run.steps.every((step) => step.status === "SUCCEEDED");
+      if (existingSucceeded) return run;
       return this.#execute(run, creator);
     });
+  }
+
+  async #createRunLocked(creator: OnboardingCreator): Promise<WorkflowRun> {
+    const existing = await this.repository.findActiveRun(creator.id);
+    if (existing) return existing;
+    const blockers = this.#prerequisiteBlockers(creator);
+    const now = new Date().toISOString();
+    const run: WorkflowRun = {
+      id: crypto.randomUUID(),
+      runNumber: `ONB-${new Date().getUTCFullYear()}-${creator.creatorNumber.slice(3).padStart(6, "0")}`,
+      creatorId: creator.id,
+      workflow: "CREATOR_ACTIVATION_V1",
+      status: blockers.length > 0 ? "BLOCKED" : "RUNNING",
+      createdAt: now,
+      completedAt: null,
+      correlationId: crypto.randomUUID(),
+      blockers,
+      steps: ACTIVATION_STEPS.map((name) => ({
+        name,
+        status: "PENDING",
+        attempts: 0,
+        startedAt: null,
+        completedAt: null,
+        error: null,
+        provider: null,
+        externalId: null,
+      })),
+    };
+    await this.repository.saveRun(run);
+    return run;
   }
 
   async resume(run: WorkflowRun, creator: OnboardingCreator): Promise<WorkflowRun> {
@@ -213,41 +229,62 @@ export class OnboardingService {
     return blockers;
   }
 
+  /** A run is finished, for this invocation, in any of these states. */
+  static isTerminal(run: WorkflowRun): boolean {
+    return ["SUCCEEDED", "FAILED", "BLOCKED", "CANCELLED", "WAITING_EXTERNAL"].includes(run.status);
+  }
+
+  /**
+   * Executes exactly one step and persists the result. Durable executors call
+   * this once per checkpoint so an interrupted activation resumes at the step
+   * boundary it actually reached, rather than replaying the whole sequence.
+   */
+  async advance(run: WorkflowRun, creator: OnboardingCreator): Promise<WorkflowRun> {
+    const step = run.steps.find((candidate) => candidate.status !== "SUCCEEDED");
+    if (!step) {
+      run.status = "SUCCEEDED";
+      run.completedAt = new Date().toISOString();
+      await this.repository.saveRun(run);
+      return run;
+    }
+    // Re-evaluated on every pass, never skipped because it is already
+    // WAITING_EXTERNAL: skipping it let a resume walk straight past the gate and
+    // complete an activation whose baseline data had still never arrived.
+    if (step.name === "AWAIT_BASELINE_READINESS" && !creator.baselineReady) {
+      step.status = "WAITING_EXTERNAL";
+      step.completedAt = new Date().toISOString();
+      run.status = "WAITING_EXTERNAL";
+      await this.repository.saveRun(run);
+      return run;
+    }
+    run.status = "RUNNING";
+    step.status = "RUNNING";
+    step.startedAt = new Date().toISOString();
+    step.attempts += 1;
+    try {
+      const resource = await this.#executeStep(step.name, creator);
+      step.status = "SUCCEEDED";
+      step.completedAt = new Date().toISOString();
+      step.error = null;
+      if (resource) {
+        step.provider = resource.provider;
+        step.externalId = resource.externalId;
+      }
+      await this.repository.saveRun(run);
+    } catch (error) {
+      step.status = "FAILED";
+      step.error = error instanceof Error ? error.message : "UNKNOWN_WORKFLOW_ERROR";
+      run.status = "FAILED";
+      await this.repository.saveRun(run);
+    }
+    return run;
+  }
+
   async #execute(run: WorkflowRun, creator: OnboardingCreator): Promise<WorkflowRun> {
     run.status = "RUNNING";
-    for (const step of run.steps) {
-      if (step.status === "SUCCEEDED" || step.status === "WAITING_EXTERNAL") continue;
-      if (step.name === "AWAIT_BASELINE_READINESS" && !creator.baselineReady) {
-        step.status = "WAITING_EXTERNAL";
-        step.completedAt = new Date().toISOString();
-        run.status = "WAITING_EXTERNAL";
-        await this.repository.saveRun(run);
-        return run;
-      }
-      step.status = "RUNNING";
-      step.startedAt = new Date().toISOString();
-      step.attempts += 1;
-      try {
-        const resource = await this.#executeStep(step.name, creator);
-        step.status = "SUCCEEDED";
-        step.completedAt = new Date().toISOString();
-        if (resource) {
-          step.provider = resource.provider;
-          step.externalId = resource.externalId;
-        }
-        await this.repository.saveRun(run);
-      } catch (error) {
-        step.status = "FAILED";
-        step.error = error instanceof Error ? error.message : "UNKNOWN_WORKFLOW_ERROR";
-        run.status = "FAILED";
-        await this.repository.saveRun(run);
-        return run;
-      }
-    }
-    run.status = "SUCCEEDED";
-    run.completedAt = new Date().toISOString();
-    await this.repository.saveRun(run);
-    return run;
+    let current = run;
+    while (!OnboardingService.isTerminal(current)) current = await this.advance(current, creator);
+    return current;
   }
 
   async #executeStep(
