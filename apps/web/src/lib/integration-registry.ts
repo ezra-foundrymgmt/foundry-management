@@ -1,5 +1,9 @@
 import "server-only";
-import type { ProviderResourceStore, ProvisionedResource } from "@creatoros/integrations";
+import {
+  lookupNotionPage,
+  type ProviderResourceStore,
+  type ProvisionedResource,
+} from "@creatoros/integrations";
 import { z } from "zod";
 import type { AppSession } from "@/lib/auth";
 import { getEnvironment } from "@/lib/environment";
@@ -256,14 +260,50 @@ export async function updateIntegrationHealth(
   if (update.error) throw new Error(`INTEGRATION_HEALTH_SAVE_FAILED: ${update.error.message}`);
 }
 
+/**
+ * Sets the page every creator hub will be created under.
+ *
+ * The page is fetched before it is saved. An unverified ID is how creator
+ * material ends up written into an arbitrary page — Notion accepts any
+ * well-formed ID at write time and only fails once a hub is already being
+ * created. Saving the title alongside it is what lets an admin confirm they
+ * picked the page they meant rather than reading back a hex string.
+ */
 export async function configureNotionParent(session: AppSession, parentPageId: string) {
+  const credentials = await getIntegrationToken(session.organizationId, "NOTION");
+  if (!credentials) throw new Error("NOTION_TOKEN_UNAVAILABLE");
+  const page = await lookupNotionPage(credentials.token, parentPageId);
+  // 404 and 403 are the same answer from Notion: a page the integration has not
+  // been granted is indistinguishable from one that does not exist.
+  if (!page) throw new Error("NOTION_PAGE_NOT_SHARED");
+  if (page.archived) throw new Error("NOTION_PAGE_ARCHIVED");
+
   const { error } = await requireAdmin()
     .from("integration_connections")
-    .update({ configuration_json: { parentPageId }, updated_at: new Date().toISOString() })
+    .update({
+      configuration_json: {
+        parentPageId: page.pageId.replaceAll("-", ""),
+        parentPageTitle: page.title,
+        parentVerifiedAt: new Date().toISOString(),
+      },
+      updated_at: new Date().toISOString(),
+    })
     .eq("organization_id", session.organizationId)
     .eq("provider", "NOTION")
     .is("creator_id", null);
   if (error) throw new Error(`NOTION_CONFIGURATION_SAVE_FAILED: ${error.message}`);
+
+  await appendAudit(
+    session,
+    "notion.creator_hub_root.configured",
+    "integration",
+    session.organizationId,
+    {
+      parentPageId: page.pageId,
+      parentPageTitle: page.title,
+    },
+  );
+  return { parentPageId: page.pageId, parentPageTitle: page.title };
 }
 
 export async function disconnectIntegration(session: AppSession, provider: OAuthProvider) {

@@ -101,7 +101,11 @@ export default async function IntegrationSettingsPage() {
           health={notion?.last_health_check_at ?? null}
           error={notion?.last_error ?? null}
           live={!mock}
-          needsConfiguration={!notion?.configuration_json?.["parentPageId"]}
+          parentPageTitle={
+            typeof notion?.configuration_json?.["parentPageTitle"] === "string"
+              ? notion.configuration_json["parentPageTitle"]
+              : null
+          }
         />
       </div>
 
@@ -150,7 +154,7 @@ function ProviderCard({
   health,
   error,
   live,
-  needsConfiguration = false,
+  parentPageTitle = null,
 }: {
   provider: "slack" | "notion";
   name: string;
@@ -162,7 +166,7 @@ function ProviderCard({
   health?: string | null;
   error?: string | null;
   live: boolean;
-  needsConfiguration?: boolean;
+  parentPageTitle?: string | null;
 }) {
   return (
     <article className="card integration-card">
@@ -196,7 +200,7 @@ function ProviderCard({
         provider={provider}
         status={status}
         live={live}
-        needsConfiguration={needsConfiguration}
+        parentPageTitle={parentPageTitle}
       />
     </article>
   );

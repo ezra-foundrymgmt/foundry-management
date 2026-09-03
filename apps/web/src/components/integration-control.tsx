@@ -1,17 +1,28 @@
 "use client";
 
 import { useState } from "react";
+import { StatusBadge } from "@/components/status-badge";
+
+/** What each Notion refusal means to the admin reading it. */
+const NOTION_MESSAGES: Record<string, string> = {
+  NOTION_PAGE_NOT_SHARED:
+    "Notion cannot see that page. Share it with the CreatorOS integration, then try again.",
+  NOTION_PAGE_ARCHIVED: "That page is archived. Restore it or choose another.",
+  NOTION_TOKEN_UNAVAILABLE: "The Notion connection needs reauthorization.",
+  INVALID_NOTION_PARENT_PAGE: "Use a valid Notion page ID.",
+};
 
 export function IntegrationControl({
   provider,
   status,
   live,
-  needsConfiguration = false,
+  parentPageTitle = null,
 }: {
   provider: "slack" | "notion";
   status: string;
   live: boolean;
-  needsConfiguration?: boolean;
+  /** The configured Creator Hub root, or null when nothing is configured. */
+  parentPageTitle?: string | null;
 }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -50,7 +61,15 @@ export function IntegrationControl({
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ parentPageId }),
     });
-    setMessage(response.ok ? "Parent page saved" : "Use a valid shared Notion page ID");
+    const data = (await response.json()) as { error?: string; parentPageTitle?: string };
+    // The reason matters here: "not shared with the integration" and "no such
+    // page" need different actions from the admin, and Notion answers both 404.
+    setMessage(
+      response.ok
+        ? `Creator Hub root set to ${data.parentPageTitle ?? "the selected page"}`
+        : ((data.error && NOTION_MESSAGES[data.error]) ??
+            "That page could not be verified. Nothing changed."),
+    );
     setBusy(false);
     if (response.ok) window.location.reload();
   }
@@ -80,9 +99,15 @@ export function IntegrationControl({
       >
         Disconnect
       </button>
-      {provider === "notion" && needsConfiguration ? (
+      {provider === "notion" ? (
         <form className="integration-config" onSubmit={(event) => void configureNotion(event)}>
-          <label htmlFor="notion-parent">Shared parent page ID</label>
+          <p style={{ fontSize: 11, margin: "0 0 6px" }}>
+            <strong>Creator Hub root:</strong>{" "}
+            {parentPageTitle ? parentPageTitle : <StatusBadge value="NOT_CONFIGURED" />}
+          </p>
+          <label htmlFor="notion-parent">
+            {parentPageTitle ? "Change root page ID" : "Shared parent page ID"}
+          </label>
           <div>
             <input
               id="notion-parent"

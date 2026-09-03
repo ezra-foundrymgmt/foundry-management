@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   LiveNotionProvider,
   LiveSlackProvider,
+  lookupNotionPage,
   lookupSlackUser,
   composeChannelName,
   MockSlackProvider,
@@ -425,5 +426,92 @@ describe("Slack user lookup", () => {
 
     expect(seenUrl).not.toContain("xoxb-secret");
     expect(seenUrl).toContain("U0PAYTON");
+  });
+});
+
+/**
+ * The Creator Hub root has to be a page this integration can actually reach
+ * before anything is written under it.
+ */
+describe("Notion page lookup", () => {
+  const PAGE = "aaaaaaaabbbbccccddddeeeeeeeeeeee";
+
+  function respond(body: unknown, status = 200) {
+    return () => Promise.resolve(new Response(JSON.stringify(body), { status }));
+  }
+
+  it("reads the title from whichever property carries it", async () => {
+    // Notion names the title property differently per database and omits it on
+    // workspace pages, so it has to be found by type, not by a fixed key.
+    const result = await lookupNotionPage(
+      "secret_token",
+      PAGE,
+      respond({
+        id: PAGE,
+        properties: {
+          Owner: { type: "people" },
+          "Page name": { type: "title", title: [{ plain_text: "Creators" }] },
+        },
+      }),
+    );
+
+    expect(result).toEqual({ pageId: PAGE, title: "Creators", archived: false });
+  });
+
+  it("joins a title split across rich-text fragments", async () => {
+    const result = await lookupNotionPage(
+      "secret_token",
+      PAGE,
+      respond({
+        id: PAGE,
+        properties: {
+          title: { type: "title", title: [{ plain_text: "Foundry " }, { plain_text: "Creators" }] },
+        },
+      }),
+    );
+
+    expect(result?.title).toBe("Foundry Creators");
+  });
+
+  it("falls back to Untitled rather than guessing", async () => {
+    const result = await lookupNotionPage("secret_token", PAGE, respond({ id: PAGE }));
+
+    expect(result?.title).toBe("Untitled");
+  });
+
+  it("treats an inaccessible page the same as a missing one", async () => {
+    // Notion answers 404 for a page that does not exist and for one this
+    // integration was never shared on. Both mean: do not write here.
+    expect(await lookupNotionPage("secret_token", PAGE, respond({}, 404))).toBeNull();
+    expect(await lookupNotionPage("secret_token", PAGE, respond({}, 403))).toBeNull();
+  });
+
+  it("reports an archived page instead of hiding it", async () => {
+    // A silent null would read as "no such page" when the truth is "unarchive
+    // it", which sends the admin looking for the wrong problem.
+    const result = await lookupNotionPage(
+      "secret_token",
+      PAGE,
+      respond({ id: PAGE, archived: true, properties: {} }),
+    );
+
+    expect(result).toMatchObject({ archived: true });
+  });
+
+  it("raises when Notion itself fails", async () => {
+    await expect(
+      lookupNotionPage("secret_token", PAGE, respond({ code: "internal_server_error" }, 500)),
+    ).rejects.toThrow(/NOTION_internal_server_error/);
+  });
+
+  it("never puts the token in the URL", async () => {
+    let seenUrl = "";
+    await lookupNotionPage("secret_token_value", PAGE, ((url: string) => {
+      seenUrl = url;
+      return Promise.resolve(new Response(JSON.stringify({ id: PAGE })));
+    }) as unknown as typeof fetch);
+
+    expect(seenUrl).not.toContain("secret_token_value");
+    expect(seenUrl).toContain(PAGE);
   });
 });

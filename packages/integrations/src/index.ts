@@ -86,6 +86,17 @@ class ProviderApiError extends Error {
   }
 }
 
+interface NotionPageResponse {
+  id?: string;
+  code?: string;
+  archived?: boolean;
+  in_trash?: boolean;
+  properties?: Record<
+    string,
+    { type?: string; title?: Array<{ plain_text?: string }> } | undefined
+  >;
+}
+
 interface SlackUserInfoResponse {
   ok: boolean;
   error?: string;
@@ -604,4 +615,68 @@ export async function lookupSlackUser(
       user.name?.trim() ||
       user.id,
   };
+}
+
+export interface NotionPageSummary {
+  pageId: string;
+  title: string;
+  archived: boolean;
+}
+
+/**
+ * Confirms the Creator Hub root page exists and this integration can reach it.
+ *
+ * Every creator hub CreatorOS ever creates is a child of this page, so an
+ * unverified ID is how creator material ends up written into an arbitrary
+ * page — one shared with the wrong people, or belonging to somebody else
+ * entirely. Notion answers 404 both for a page that does not exist and for one
+ * the integration was never granted, which is exactly the distinction that must
+ * not be guessed at.
+ *
+ * Returns null when the page is unreachable. An archived page is returned rather
+ * than hidden: the caller decides, and a silent null would read as "no such
+ * page" when the truth is "you need to unarchive it".
+ */
+export async function lookupNotionPage(
+  token: string,
+  pageId: string,
+  request: FetchLike = fetch,
+): Promise<NotionPageSummary | null> {
+  const response = await request(`https://api.notion.com/v1/pages/${encodeURIComponent(pageId)}`, {
+    method: "GET",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "notion-version": "2026-03-11",
+    },
+  });
+  if (response.status === 404 || response.status === 403) return null;
+  const data = (await response.json()) as NotionPageResponse;
+  if (!response.ok)
+    throw new ProviderApiError(
+      "NOTION",
+      typeof data.code === "string" ? data.code : `HTTP_${response.status}`,
+    );
+  if (!data.id) return null;
+  return {
+    pageId: data.id,
+    title: notionPageTitle(data) ?? "Untitled",
+    archived: data.archived === true || data.in_trash === true,
+  };
+}
+
+/**
+ * Notion puts a page's title under whichever property is of type `title`, whose
+ * name varies by database and is absent on a workspace page, so it has to be
+ * found by type rather than looked up by a fixed key.
+ */
+function notionPageTitle(page: NotionPageResponse): string | null {
+  for (const property of Object.values(page.properties ?? {})) {
+    if (property?.type !== "title") continue;
+    const text = (property.title ?? [])
+      .map((fragment) => fragment.plain_text ?? "")
+      .join("")
+      .trim();
+    if (text) return text;
+  }
+  return null;
 }
