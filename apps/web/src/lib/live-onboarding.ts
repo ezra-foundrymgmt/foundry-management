@@ -114,10 +114,15 @@ export async function loadLiveOnboardingCreator(
     status:
       creator.status === "WATCH" || creator.status === "ACTIVE" ? creator.status : "ONBOARDING",
     contractSigned: ["SIGNED", "ACTIVE"].includes(String(creator.contract_status).toUpperCase()),
-    adultConfirmed: ["CONFIRMED", "VERIFIED", "COMPLETE"].includes(
+    // Matches the allowlist in activation-readiness.ts, which already included
+    // "PASSED" — the value seed.sql and every fixture actually use. This copy
+    // did not, so no creator using the standard value could ever pass this
+    // gate: the readiness panel showed one set of blockers, and the workflow
+    // itself refused to start for a different, wrong reason.
+    adultConfirmed: ["CONFIRMED", "VERIFIED", "COMPLETE", "PASSED"].includes(
       String(creator.adult_confirmation_status).toUpperCase(),
     ),
-    jurisdictionApproved: ["APPROVED", "COMPLETE"].includes(
+    jurisdictionApproved: ["APPROVED", "COMPLETE", "PASSED"].includes(
       String(creator.jurisdiction_review_status).toUpperCase(),
     ),
     contactEmail: creator.email,
