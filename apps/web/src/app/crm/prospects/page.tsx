@@ -64,7 +64,10 @@ export default async function ProspectsPage() {
                   <article className="kanban-card" key={prospect.id}>
                     <strong>{prospect.stageName}</strong>
                     <p>
-                      {prospect.niche} · {(prospect.followerCountEstimate / 1000).toFixed(0)}K est.
+                      {prospect.niche} ·{" "}
+                      {prospect.followerCountEstimate === null
+                        ? "audience unknown"
+                        : `${(prospect.followerCountEstimate / 1000).toFixed(0)}K est.`}
                     </p>
                     <div
                       style={{

@@ -6,11 +6,13 @@ import { StatusBadge } from "@/components/status-badge";
 import { isMockMode } from "@/lib/environment";
 import { getLiveCreators } from "@/lib/live-data";
 
-const money = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-  maximumFractionDigits: 0,
-});
+import {
+  formatMoney,
+  formatScore,
+  formatTrend,
+  trendClassName,
+  UNKNOWN_DISPLAY,
+} from "@/lib/format";
 export default async function CreatorsPage() {
   const creatorRecords = isMockMode() ? creators : await getLiveCreators();
   return (
@@ -66,18 +68,30 @@ export default async function CreatorsPage() {
                   <td>
                     <StatusBadge value={creator.status} />
                   </td>
-                  <td>{money.format(creator.monthlyRevenue)}</td>
-                  <td className={creator.revenueTrendPercent >= 0 ? "trend-up" : "trend-down"}>
-                    {creator.revenueTrendPercent > 0 ? "+" : ""}
-                    {creator.revenueTrendPercent}%
+                  <td title={creator.monthlyRevenue === null ? "No revenue data imported" : undefined}>
+                    {formatMoney(creator.monthlyRevenue)}
+                  </td>
+                  <td
+                    className={trendClassName(creator.revenueTrendPercent)}
+                    title={
+                      creator.revenueTrendPercent === null
+                        ? "Not enough history to compute a trend"
+                        : undefined
+                    }
+                  >
+                    {formatTrend(creator.revenueTrendPercent)}
                   </td>
                   <td>
                     <StatusBadge
                       value={creator.healthBand}
-                      label={`${creator.healthScore} · ${creator.healthBand}`}
+                      label={`${formatScore(creator.healthScore)} · ${creator.healthBand}`}
                     />
                   </td>
-                  <td>{creator.contentBufferDays} days</td>
+                  <td>
+                    {creator.contentBufferDays === null
+                      ? UNKNOWN_DISPLAY
+                      : `${creator.contentBufferDays} days`}
+                  </td>
                   <td>{creator.owner}</td>
                   <td>
                     <StatusBadge value={creator.integrationHealth} />

@@ -360,6 +360,9 @@ h3 {
 .trend-down {
   color: var(--red);
 }
+.trend-unknown {
+  color: var(--ink-soft);
+}
 .section-head {
   min-height: 51px;
   display: flex;
