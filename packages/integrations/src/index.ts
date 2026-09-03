@@ -1,3 +1,5 @@
+import { assertProjectableFields } from "./projection";
+export * from "./projection";
 export type ConnectionStatus =
   | "NOT_CONFIGURED"
   | "CONFIGURED"
@@ -107,8 +109,12 @@ export class LiveSlackProvider implements SlackProvider {
   }): Promise<ProvisionedResource> {
     const existing = await this.store.find(input.idempotencyKey);
     if (existing) return existing;
+    // The creator discriminator matters: two creators sharing a stage name would
+    // otherwise generate the same channel name, and the name_taken reconcile
+    // below would bind the second creator to the first creator's channel.
+    const discriminator = input.creatorId.replace(/[^a-zA-Z0-9]/g, "").slice(-6).toLowerCase();
     const name = normalizeSlackChannel(
-      input.audience === "creator" ? `creator-${input.stageSlug}` : `internal-${input.stageSlug}`,
+      `${input.audience === "creator" ? "creator" : "internal"}-${input.stageSlug}-${discriminator}`,
     );
     const created = await this.#call("conversations.create", { name, is_private: true });
     let externalId = created.channel?.id;
@@ -194,11 +200,15 @@ export class LiveNotionProvider implements NotionProvider {
     ]);
   }
   async updateCreatorHub(resourceId: string, fields: Readonly<Record<string, unknown>>) {
-    const status =
-      typeof fields["status"] === "string" ? fields["status"].slice(0, 120) : "Updated";
-    await this.#call(`/blocks/${resourceId}/children`, "PATCH", {
-      children: [paragraph(`CreatorOS status: ${status}`)],
-    });
+    // Every value crossing into a creator-readable page passes the
+    // classification boundary first. It throws rather than truncating: a
+    // truncated secret is still a leaked secret.
+    const safe = assertProjectableFields(fields);
+    const lines = Object.entries(safe).map(([field, value]) =>
+      paragraph(`CreatorOS ${field}: ${value.slice(0, 1800)}`),
+    );
+    if (!lines.length) return;
+    await this.#call(`/blocks/${resourceId}/children`, "PATCH", { children: lines });
   }
   async archiveCreatorHub(resourceId: string) {
     await this.#call(`/pages/${resourceId}`, "PATCH", { archived: true });
@@ -206,6 +216,22 @@ export class LiveNotionProvider implements NotionProvider {
   async #createPage(key: string, title: string, notes: string[]): Promise<ProvisionedResource> {
     const existing = await this.store.find(key);
     if (existing) return existing;
+    // Notion has no create-if-absent and no name_taken error, so a crash
+    // between creating the page and persisting its id would orphan the page and
+    // let a retry create "Madison Hub 2". Reconciling by title under the
+    // configured parent first closes that window, mirroring the Slack
+    // name_taken path.
+    const reconciled = await this.#findPage(title);
+    if (reconciled) {
+      const recovered: ProvisionedResource = {
+        externalId: reconciled,
+        name: title,
+        provider: "NOTION",
+        mode: "LIVE",
+      };
+      await this.store.save(key, recovered);
+      return recovered;
+    }
     const response = await this.#call("/pages", "POST", {
       parent: { type: "page_id", page_id: this.parentPageId },
       properties: { title: { type: "title", title: [richText(title)] } },
@@ -221,6 +247,36 @@ export class LiveNotionProvider implements NotionProvider {
     };
     await this.store.save(key, resource);
     return resource;
+  }
+
+  /**
+   * Finds an existing page with this exact title directly under the configured
+   * Creator Hub root. Notion's search index is eventually consistent, so this
+   * narrows the duplicate window rather than eliminating it; the store lookup
+   * above remains the primary guard.
+   */
+  async #findPage(title: string): Promise<string | undefined> {
+    const response = await this.#call("/search", "POST", {
+      query: title,
+      filter: { value: "page", property: "object" },
+      page_size: 50,
+    });
+    const results = Array.isArray(response["results"]) ? response["results"] : [];
+    for (const entry of results) {
+      const page = entry as {
+        id?: string;
+        archived?: boolean;
+        parent?: { page_id?: string };
+        properties?: { title?: { title?: Array<{ plain_text?: string }> } };
+      };
+      if (page.archived) continue;
+      if (page.parent?.page_id?.replace(/-/g, "") !== this.parentPageId.replace(/-/g, "")) continue;
+      const pageTitle = (page.properties?.title?.title ?? [])
+        .map((part) => part.plain_text ?? "")
+        .join("");
+      if (pageTitle === title && typeof page.id === "string") return page.id;
+    }
+    return undefined;
   }
   async #call(path: string, method: "POST" | "PATCH", body: Record<string, unknown>) {
     const response = await this.request(`https://api.notion.com/v1${path}`, {
