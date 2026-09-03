@@ -46,6 +46,12 @@ const schema = z.object({
     z.string().trim().min(1).default("claude-opus-5"),
   ),
   SENTRY_DSN: optionalSecret,
+  /**
+   * The Supabase project ref that holds real Foundry data. When set, a preview
+   * deployment pointed at that project refuses to start rather than letting a
+   * branch build mutate production records.
+   */
+  PRODUCTION_SUPABASE_PROJECT_REF: optionalSecret,
   VERCEL_ENV: z.preprocess(
     blankToUndefined,
     z.enum(["development", "preview", "production"]).optional(),
@@ -75,6 +81,20 @@ export function isDeployedEnvironment(environment = getEnvironment()): boolean {
   return environment.VERCEL_ENV !== undefined || environment.APP_ENV !== "development";
 }
 
+/**
+ * True when a non-production deployment is configured against the Supabase
+ * project that holds real Foundry data. Branch previews are the realistic way
+ * production records get mutated by accident, and a preview URL is reachable by
+ * anyone with the link.
+ */
+export function targetsProductionDatabaseFromPreview(environment = getEnvironment()): boolean {
+  const productionRef = environment.PRODUCTION_SUPABASE_PROJECT_REF;
+  const url = environment.NEXT_PUBLIC_SUPABASE_URL;
+  if (!productionRef || !url) return false;
+  if (environment.VERCEL_ENV === "production" && environment.APP_ENV === "production") return false;
+  return url.includes(productionRef);
+}
+
 export function validateRuntimeEnvironment(environment = getEnvironment()): string[] {
   const errors: string[] = [];
   if (environment.VERCEL_ENV === "preview" && environment.APP_ENV === "production")
@@ -84,6 +104,10 @@ export function validateRuntimeEnvironment(environment = getEnvironment()): stri
   if (environment.CREATOROS_INTEGRATION_MODE === "mock" && isDeployedEnvironment(environment))
     errors.push(
       "CREATOROS_INTEGRATION_MODE=mock is forbidden outside local development: mock mode serves an unauthenticated super_admin session. Set CREATOROS_INTEGRATION_MODE=live.",
+    );
+  if (targetsProductionDatabaseFromPreview(environment))
+    errors.push(
+      "A preview deployment is pointed at the production Supabase project. Point previews at a staging project, or clear PRODUCTION_SUPABASE_PROJECT_REF if this is intentional.",
     );
   if (environment.CREATOROS_INTEGRATION_MODE === "live") {
     const required: Array<keyof CreatorOSEnvironment> = [

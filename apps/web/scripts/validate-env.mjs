@@ -25,6 +25,17 @@ if (mode === "mock" && deployed)
     "CREATOROS_INTEGRATION_MODE=mock is forbidden outside local development: it serves an unauthenticated super_admin session. Set CREATOROS_INTEGRATION_MODE=live.",
   );
 
+// A branch preview reaching the production Supabase project with the service
+// role bypasses RLS on real Foundry records, and preview URLs are reachable by
+// anyone holding the link.
+const productionRef = read("PRODUCTION_SUPABASE_PROJECT_REF");
+const supabaseUrl = read("NEXT_PUBLIC_SUPABASE_URL");
+const isRealProduction = vercelEnv === "production" && appEnv === "production";
+if (productionRef && supabaseUrl && !isRealProduction && supabaseUrl.includes(productionRef))
+  errors.push(
+    "A preview deployment is pointed at the production Supabase project. Point previews at a staging project, or clear PRODUCTION_SUPABASE_PROJECT_REF if this is intentional.",
+  );
+
 if (mode === "live") {
   const required = [
     "NEXT_PUBLIC_APP_URL",

@@ -4,6 +4,7 @@ import {
   isDeployedEnvironment,
   isMockMode,
   resetEnvironmentCache,
+  targetsProductionDatabaseFromPreview,
   validateRuntimeEnvironment,
 } from "./environment";
 
@@ -19,6 +20,7 @@ const TOUCHED = [
   "INNGEST_EVENT_KEY",
   "INNGEST_SIGNING_KEY",
   "INTEGRATION_ENCRYPTION_KEY",
+  "PRODUCTION_SUPABASE_PROJECT_REF",
 ] as const;
 
 function applyEnvironment(values: Record<string, string | undefined>) {
@@ -94,6 +96,62 @@ describe("environment contract: mock mode may never be deployed", () => {
     });
     expect(validateRuntimeEnvironment()).toEqual([]);
     expect(isMockMode()).toBe(false);
+  });
+});
+
+describe("environment contract: previews may not reach production data", () => {
+  const PRODUCTION_REF = "mqyvckazqawrqqsasomj";
+
+  it("refuses a preview deployment pointed at the production Supabase project", () => {
+    applyEnvironment({
+      APP_ENV: "staging",
+      VERCEL_ENV: "preview",
+      CREATOROS_INTEGRATION_MODE: "live",
+      ...LIVE_CREDENTIALS,
+      NEXT_PUBLIC_SUPABASE_URL: `https://${PRODUCTION_REF}.supabase.co`,
+      PRODUCTION_SUPABASE_PROJECT_REF: PRODUCTION_REF,
+    });
+    expect(targetsProductionDatabaseFromPreview()).toBe(true);
+    expect(validateRuntimeEnvironment().join(" ")).toContain(
+      "preview deployment is pointed at the production Supabase project",
+    );
+  });
+
+  it("allows a preview pointed at a different project", () => {
+    applyEnvironment({
+      APP_ENV: "staging",
+      VERCEL_ENV: "preview",
+      CREATOROS_INTEGRATION_MODE: "live",
+      ...LIVE_CREDENTIALS,
+      NEXT_PUBLIC_SUPABASE_URL: "https://stagingprojectref00.supabase.co",
+      PRODUCTION_SUPABASE_PROJECT_REF: PRODUCTION_REF,
+    });
+    expect(targetsProductionDatabaseFromPreview()).toBe(false);
+    expect(validateRuntimeEnvironment()).toEqual([]);
+  });
+
+  it("allows the real production deployment to reach production", () => {
+    applyEnvironment({
+      APP_ENV: "production",
+      VERCEL_ENV: "production",
+      CREATOROS_INTEGRATION_MODE: "live",
+      ...LIVE_CREDENTIALS,
+      NEXT_PUBLIC_SUPABASE_URL: `https://${PRODUCTION_REF}.supabase.co`,
+      PRODUCTION_SUPABASE_PROJECT_REF: PRODUCTION_REF,
+    });
+    expect(targetsProductionDatabaseFromPreview()).toBe(false);
+    expect(validateRuntimeEnvironment()).toEqual([]);
+  });
+
+  it("does nothing when the production ref is not declared", () => {
+    applyEnvironment({
+      APP_ENV: "staging",
+      VERCEL_ENV: "preview",
+      CREATOROS_INTEGRATION_MODE: "live",
+      ...LIVE_CREDENTIALS,
+      NEXT_PUBLIC_SUPABASE_URL: `https://${PRODUCTION_REF}.supabase.co`,
+    });
+    expect(targetsProductionDatabaseFromPreview()).toBe(false);
   });
 });
 
