@@ -3,6 +3,7 @@ import { z } from "zod";
 import { ACTIVATION_STEPS, type WorkflowRun } from "@creatoros/workflows";
 import { createLiveOnboardingService, loadLiveOnboardingCreator } from "@/lib/live-onboarding";
 import { produceDailyCreatorReport } from "@/lib/daily-report";
+import { runDueReportSchedules } from "@/lib/report-scheduler";
 import { logEvent } from "@/lib/observability";
 
 export const inngest = new Inngest({ id: "creatoros" });
@@ -147,5 +148,49 @@ export const activateCreator = inngest.createFunction(
         };
     }
     return { workflowRunId: created.id, status: "RUNNING" };
+  },
+);
+
+/**
+ * Drives the report schedules activation creates.
+ *
+ * Hourly rather than daily so a schedule in any timezone becomes due within an
+ * hour of its local time, and so a missed hour is picked up on the next tick
+ * instead of waiting a full day. Claiming is atomic in SQL, so an overlapping
+ * run picks up nothing rather than producing a second report.
+ *
+ * There is deliberately only one scheduler. Adding a second (a Vercel cron, say)
+ * would create a competing source of truth for when a report is due.
+ */
+export const runReportSchedules = inngest.createFunction(
+  {
+    id: "creator-report-scheduler",
+    retries: 2,
+    // One scheduler pass at a time across the whole deployment.
+    concurrency: { limit: 1 },
+    triggers: [{ cron: "0 * * * *" }],
+  },
+  async ({ step }) => {
+    const result = await step.run("run-due-schedules", () => runDueReportSchedules());
+    const produced = result.outcomes.filter((outcome) => outcome.status === "PRODUCED").length;
+    const skipped = result.outcomes.filter((outcome) => outcome.status === "SKIPPED").length;
+    const failed = result.outcomes.filter((outcome) => outcome.status === "FAILED");
+
+    logEvent(failed.length ? "warn" : "info", "report_scheduler.completed", {
+      claimed: result.claimed,
+      produced,
+      skipped,
+      failed: failed.length,
+    });
+    // Surfaced individually so an operator can see which schedule broke rather
+    // than only a count.
+    for (const outcome of failed)
+      logEvent("error", "report_scheduler.schedule_failed", {
+        scheduleId: outcome.scheduleId,
+        creatorId: outcome.creatorId,
+        reason: outcome.reason,
+      });
+
+    return { claimed: result.claimed, produced, skipped, failed: failed.length };
   },
 );
