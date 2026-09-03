@@ -59,6 +59,40 @@ describe("creator-facing projection boundary", () => {
     ).toThrow(ProjectionBoundaryError);
   });
 
+  it("sees through zero-width characters, soft hyphens and homoglyphs", () => {
+    // Each of these was verified to walk straight past the raw-ASCII patterns.
+    // A soft hyphen in particular is what a PDF or rich-text paste introduces,
+    // so this is an accident as much as an attack.
+    const evasions = [
+      "contribution​margin is 41%", // zero-width space
+      "contri­bution margin is 41%", // soft hyphen
+      "cоntribution margin 41%", // Cyrillic o
+      "﻿contribution margin", // byte order mark
+      "contribution margin", // thin space
+      "CONTRIBUTION   MARGIN", // case and spacing
+    ];
+    for (const value of evasions)
+      expect(() => assertProjectableFields({ status: value })).toThrow("NOTION_PROJECTION_REFUSED");
+  });
+
+  it("catches plural forms of credential words", () => {
+    for (const value of ["here are the tokens", "rotate the secrets", "api keys attached"])
+      expect(() => assertProjectableFields({ resources: value })).toThrow(
+        "NOTION_PROJECTION_REFUSED",
+      );
+  });
+
+  it("still passes ordinary creator-facing copy", () => {
+    // The screen must not be so broad that legitimate content is refused.
+    const allowed = {
+      welcome: "Welcome to Foundry, Madison — here is how we work together.",
+      thisWeek: "Three posts, two stories, one collaboration call on Thursday.",
+      performanceSummary: "Reach grew against your own baseline for the third week.",
+      resources: "Brand kit, posting checklist, and the editing turnaround guide.",
+    };
+    expect(assertProjectableFields(allowed)).toEqual(allowed);
+  });
+
   it("refuses a non-string value instead of coercing it", () => {
     expect(() => assertProjectableFields({ status: { nested: "object" } })).toThrow(
       "expected a string",

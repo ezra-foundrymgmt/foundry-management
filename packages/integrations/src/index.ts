@@ -1,5 +1,6 @@
 import { assertProjectableFields } from "./projection";
 export * from "./projection";
+import { createHash } from "node:crypto";
 export type ConnectionStatus =
   | "NOT_CONFIGURED"
   | "CONFIGURED"
@@ -88,7 +89,7 @@ class ProviderApiError extends Error {
 interface SlackResponse {
   ok: boolean;
   error?: string;
-  channel?: { id?: string; name?: string };
+  channel?: { id?: string; name?: string; is_private?: boolean };
   channels?: Array<{ id?: string; name?: string }>;
   response_metadata?: { next_cursor?: string };
 }
@@ -109,20 +110,20 @@ export class LiveSlackProvider implements SlackProvider {
   }): Promise<ProvisionedResource> {
     const existing = await this.store.find(input.idempotencyKey);
     if (existing) return existing;
-    // The creator discriminator matters: two creators sharing a stage name would
-    // otherwise generate the same channel name, and the name_taken reconcile
-    // below would bind the second creator to the first creator's channel.
-    const discriminator = input.creatorId
-      .replace(/[^a-zA-Z0-9]/g, "")
-      .slice(-6)
-      .toLowerCase();
-    const name = normalizeSlackChannel(
-      `${input.audience === "creator" ? "creator" : "internal"}-${input.stageSlug}-${discriminator}`,
+    const name = composeChannelName(
+      input.audience === "creator" ? "creator" : "internal",
+      input.stageSlug,
+      input.creatorId,
     );
     const created = await this.#call("conversations.create", { name, is_private: true });
     let externalId = created.channel?.id;
     if (!created.ok && created.error === "name_taken") externalId = await this.#findChannel(name);
     if (!externalId) throw new ProviderApiError("SLACK", created.error ?? "CREATE_FAILED");
+    // A name_taken reconcile recovers a channel this code did not create in this
+    // run. Adopting it blindly would bind a creator channel to whatever already
+    // held the name — including a public channel, which would publish creator
+    // material to the whole workspace.
+    if (!created.ok) await this.#assertPrivateChannel(externalId);
     const resource: ProvisionedResource = {
       externalId,
       name,
@@ -167,6 +168,16 @@ export class LiveSlackProvider implements SlackProvider {
       cursor = response.response_metadata?.next_cursor ?? "";
     } while (cursor);
     return undefined;
+  }
+  async #assertPrivateChannel(channelId: string): Promise<void> {
+    const info = await this.#call("conversations.info", { channel: channelId });
+    if (!info.ok) throw new ProviderApiError("SLACK", info.error ?? "CHANNEL_INFO_FAILED");
+    if (info.channel?.is_private !== true)
+      throw new ProviderApiError(
+        "SLACK",
+        "RECONCILED_CHANNEL_NOT_PRIVATE",
+        `refusing to bind a creator channel to public channel ${channelId}`,
+      );
   }
   async #requireOk(method: string, body: Record<string, unknown>): Promise<void> {
     const response = await this.#call(method, body);
@@ -221,10 +232,14 @@ export class LiveNotionProvider implements NotionProvider {
     if (existing) return existing;
     // Notion has no create-if-absent and no name_taken error, so a crash
     // between creating the page and persisting its id would orphan the page and
-    // let a retry create "Madison Hub 2". Reconciling by title under the
-    // configured parent first closes that window, mirroring the Slack
-    // name_taken path.
-    const reconciled = await this.#findPage(title);
+    // let a retry create "Madison Hub 2". Reconciling first closes that window,
+    // mirroring the Slack name_taken path.
+    //
+    // The match is on the provisioning marker, NOT the title. Titles are derived
+    // from the stage name, and two creators can share a stage name — matching on
+    // title would bind the second creator to the first creator's hub, which for
+    // a creator-readable page means showing one creator another's material.
+    const reconciled = await this.#findPage(title, key);
     if (reconciled) {
       const recovered: ProvisionedResource = {
         externalId: reconciled,
@@ -238,7 +253,7 @@ export class LiveNotionProvider implements NotionProvider {
     const response = await this.#call("/pages", "POST", {
       parent: { type: "page_id", page_id: this.parentPageId },
       properties: { title: { type: "title", title: [richText(title)] } },
-      children: notes.map(paragraph),
+      children: [...notes.map(paragraph), paragraph(provisioningMarker(key))],
     });
     const id = typeof response["id"] === "string" ? response["id"] : undefined;
     if (!id) throw new ProviderApiError("NOTION", "CREATE_FAILED");
@@ -253,35 +268,68 @@ export class LiveNotionProvider implements NotionProvider {
   }
 
   /**
-   * Finds an existing page with this exact title directly under the configured
-   * Creator Hub root. Notion's search index is eventually consistent, so this
-   * narrows the duplicate window rather than eliminating it; the store lookup
-   * above remains the primary guard.
+   * Finds a page this code previously created for exactly this provisioning key,
+   * directly under the configured Creator Hub root.
+   *
+   * A candidate must match the title *and* carry the provisioning marker for
+   * this key. Title alone is not identity: two creators can share a stage name,
+   * and adopting a namesake's page would show one creator another's material.
+   *
+   * Notion's search index is eventually consistent, so this narrows the
+   * duplicate window rather than eliminating it; the store lookup remains the
+   * primary guard.
    */
-  async #findPage(title: string): Promise<string | undefined> {
-    const response = await this.#call("/search", "POST", {
-      query: title,
-      filter: { value: "page", property: "object" },
-      page_size: 50,
-    });
-    const results = Array.isArray(response["results"]) ? response["results"] : [];
-    for (const entry of results) {
-      const page = entry as {
-        id?: string;
-        archived?: boolean;
-        parent?: { page_id?: string };
-        properties?: { title?: { title?: Array<{ plain_text?: string }> } };
-      };
-      if (page.archived) continue;
-      if (page.parent?.page_id?.replace(/-/g, "") !== this.parentPageId.replace(/-/g, "")) continue;
-      const pageTitle = (page.properties?.title?.title ?? [])
-        .map((part) => part.plain_text ?? "")
-        .join("");
-      if (pageTitle === title && typeof page.id === "string") return page.id;
+  async #findPage(title: string, key: string): Promise<string | undefined> {
+    const marker = provisioningMarker(key);
+    let cursor: string | undefined;
+    // Search is workspace-wide full text, so a busy workspace pushes the page we
+    // want past the first result page. Paginate, bounded.
+    for (let page = 0; page < 10; page += 1) {
+      const response = await this.#call("/search", "POST", {
+        query: title,
+        filter: { value: "page", property: "object" },
+        page_size: 100,
+        ...(cursor ? { start_cursor: cursor } : {}),
+      });
+      const results = Array.isArray(response["results"]) ? response["results"] : [];
+      for (const entry of results) {
+        const candidate = entry as {
+          id?: string;
+          archived?: boolean;
+          parent?: { page_id?: string };
+          properties?: { title?: { title?: Array<{ plain_text?: string }> } };
+        };
+        if (candidate.archived || typeof candidate.id !== "string") continue;
+        if (candidate.parent?.page_id?.replace(/-/g, "") !== this.parentPageId.replace(/-/g, ""))
+          continue;
+        const pageTitle = (candidate.properties?.title?.title ?? [])
+          .map((part) => part.plain_text ?? "")
+          .join("");
+        if (pageTitle !== title) continue;
+        if (await this.#hasMarker(candidate.id, marker)) return candidate.id;
+      }
+      const hasMore = response["has_more"] === true;
+      const next = response["next_cursor"];
+      if (!hasMore || typeof next !== "string") return undefined;
+      cursor = next;
     }
     return undefined;
   }
-  async #call(path: string, method: "POST" | "PATCH", body: Record<string, unknown>) {
+
+  /** Confirms a candidate page carries this provisioning key's marker block. */
+  async #hasMarker(pageId: string, marker: string): Promise<boolean> {
+    const response = await this.#call(`/blocks/${pageId}/children?page_size=100`, "GET", {});
+    const results = Array.isArray(response["results"]) ? response["results"] : [];
+    return results.some((entry) => {
+      const block = entry as {
+        paragraph?: { rich_text?: Array<{ plain_text?: string }> };
+      };
+      return (block.paragraph?.rich_text ?? []).some((part) =>
+        (part.plain_text ?? "").includes(marker),
+      );
+    });
+  }
+  async #call(path: string, method: "GET" | "POST" | "PATCH", body: Record<string, unknown>) {
     const response = await this.request(`https://api.notion.com/v1${path}`, {
       method,
       headers: {
@@ -289,7 +337,8 @@ export class LiveNotionProvider implements NotionProvider {
         "content-type": "application/json",
         "notion-version": "2026-03-11",
       },
-      body: JSON.stringify(body),
+      // fetch rejects a GET carrying a body.
+      ...(method === "GET" ? {} : { body: JSON.stringify(body) }),
     });
     const data = (await response.json()) as Record<string, unknown>;
     if (!response.ok)
@@ -308,6 +357,56 @@ function normalizeSlackChannel(value: string): string {
     .replace(/[^a-z0-9-_]/g, "-")
     .replace(/-+/g, "-")
     .slice(0, 80);
+}
+
+/** Slack's hard limit on a channel name. */
+const SLACK_CHANNEL_NAME_LIMIT = 80;
+
+/**
+ * The identity stamp written into every page this code provisions.
+ *
+ * Reconciling an orphaned page needs to prove the candidate is *this* creator's
+ * page. A title cannot prove that — two creators can share a stage name — so
+ * creation writes this marker and reconcile requires it.
+ */
+export function provisioningMarker(idempotencyKey: string): string {
+  return `creatoros-provisioning-key:${createHash("sha256").update(idempotencyKey).digest("hex").slice(0, 24)}`;
+}
+
+/**
+ * A stable, non-empty discriminator derived from the whole creator id.
+ *
+ * A tail slice of the id was not good enough: it folds case (so two ids
+ * differing only in case collide) and produces an empty string for any id with
+ * no alphanumerics, which would silently drop the discriminator entirely. A
+ * hash always yields a fixed-width value and uses the whole id.
+ */
+export function creatorDiscriminator(creatorId: string): string {
+  return createHash("sha256").update(creatorId).digest("hex").slice(0, 8);
+}
+
+/**
+ * Composes a channel name that keeps its discriminator.
+ *
+ * The discriminator is the trailing component, so truncating the *composed*
+ * name to Slack's 80-character limit removes it first — which reintroduces
+ * exactly the cross-creator collision the discriminator exists to prevent. The
+ * slug is truncated instead, and the discriminator's width is reserved.
+ */
+export function composeChannelName(
+  audience: "creator" | "internal",
+  stageSlug: string,
+  creatorId: string,
+): string {
+  const discriminator = creatorDiscriminator(creatorId);
+  const prefix = audience;
+  const budget = SLACK_CHANNEL_NAME_LIMIT - prefix.length - discriminator.length - 2;
+  const slug = normalizeSlackChannel(stageSlug).slice(0, Math.max(budget, 1));
+  const name = normalizeSlackChannel(`${prefix}-${slug}-${discriminator}`);
+  // Composition must never be able to eat the discriminator.
+  if (!name.endsWith(discriminator))
+    throw new ProviderApiError("SLACK", "CHANNEL_NAME_DISCRIMINATOR_LOST", name);
+  return name;
 }
 
 function richText(content: string) {

@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   LiveNotionProvider,
   LiveSlackProvider,
+  composeChannelName,
   MockSlackProvider,
   OnlyFansProviderPlaceholder,
+  provisioningMarker,
   type ProviderResourceStore,
   type ProvisionedResource,
 } from "./index";
@@ -97,6 +99,86 @@ describe("live provider adapters", () => {
     expect(names[0]).not.toBe(names[1]);
   });
 
+  it("keeps the discriminator even for a stage name that blows the 80-char limit", () => {
+    // Regression: the discriminator was appended last and the composed name was
+    // truncated to 80, so a long stage name silently ate the discriminator and
+    // reintroduced the collision it exists to prevent. Measured previously: a
+    // 72-character slug removed it entirely.
+    const longSlug =
+      "madison-carter-the-extremely-long-stage-name-that-will-not-fit-in-eighty-characters";
+    const a = composeChannelName("creator", longSlug, "aaaaaaaa-0000-4000-8000-00000000aaaa");
+    const b = composeChannelName("creator", longSlug, "bbbbbbbb-0000-4000-8000-00000000bbbb");
+    expect(a.length).toBeLessThanOrEqual(80);
+    expect(b.length).toBeLessThanOrEqual(80);
+    expect(a).not.toBe(b);
+  });
+
+  it("produces a usable discriminator for a creator id with no alphanumerics", () => {
+    // A tail-slice discriminator collapsed to "" here and silently vanished.
+    const name = composeChannelName("internal", "madison", "----");
+    expect(name).toMatch(/^internal-madison-[0-9a-f]{8}$/);
+  });
+
+  /** Slack fake where the requested name is already taken by `existing`. */
+  function slackNameTakenFake(existing: { id: string; is_private: boolean }): typeof fetch {
+    let requestedName = "";
+    return (url, init) => {
+      const method = urlOf(url).split("/api/")[1];
+      const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
+        name?: string;
+      };
+      if (method === "conversations.create") {
+        requestedName = body.name ?? "";
+        return Promise.resolve(new Response(JSON.stringify({ ok: false, error: "name_taken" })));
+      }
+      if (method === "conversations.list")
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ ok: true, channels: [{ id: existing.id, name: requestedName }] }),
+          ),
+        );
+      if (method === "conversations.info")
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              ok: true,
+              channel: { id: existing.id, is_private: existing.is_private },
+            }),
+          ),
+        );
+      return Promise.resolve(new Response(JSON.stringify({ ok: true })));
+    };
+  }
+
+  const reconcileInput = {
+    creatorId: "aaaaaaaa-0000-4000-8000-00000000aaaa",
+    stageSlug: "madison",
+    audience: "creator" as const,
+    idempotencyKey: "slack:reconcile",
+  };
+
+  it("refuses to bind a creator channel to a reconciled public channel", async () => {
+    // name_taken recovery must not adopt whatever already held the name: a
+    // public channel would publish creator material to the whole workspace.
+    const provider = new LiveSlackProvider(
+      "token",
+      new MemoryResourceStore(),
+      slackNameTakenFake({ id: "C_PUBLIC", is_private: false }),
+    );
+    await expect(provider.createChannel(reconcileInput)).rejects.toThrow(
+      "RECONCILED_CHANNEL_NOT_PRIVATE",
+    );
+  });
+
+  it("adopts a reconciled channel that is genuinely private", async () => {
+    const provider = new LiveSlackProvider(
+      "token",
+      new MemoryResourceStore(),
+      slackNameTakenFake({ id: "C_PRIVATE", is_private: true }),
+    );
+    expect((await provider.createChannel(reconcileInput)).externalId).toBe("C_PRIVATE");
+  });
+
   it("creates a minimal Notion projection and reuses its deterministic key", async () => {
     const store = new MemoryResourceStore();
     const calls: Array<{ url: string; body: string }> = [];
@@ -118,32 +200,54 @@ describe("live provider adapters", () => {
     expect(creates[0]?.body).not.toContain("email");
   });
 
-  it("recovers an orphaned Notion page instead of creating a duplicate", async () => {
-    // Simulates a crash between creating the page and persisting its id: the
-    // store is empty, but the page already exists under the parent.
-    const store = new MemoryResourceStore();
-    let created = 0;
-    const request: typeof fetch = (url) => {
+  function notionFake(options: {
+    searchResults: unknown[];
+    childrenByPage: Record<string, string[]>;
+    onCreate?: () => void;
+  }): typeof fetch {
+    return (url, init) => {
       const target = urlOf(url);
       if (target.endsWith("/search"))
         return Promise.resolve(
+          new Response(JSON.stringify({ results: options.searchResults, has_more: false })),
+        );
+      const children = /\/blocks\/([^/?]+)\/children/.exec(target);
+      if (children && (init?.method ?? "GET") === "GET") {
+        const markers = options.childrenByPage[children[1] ?? ""] ?? [];
+        return Promise.resolve(
           new Response(
             JSON.stringify({
-              results: [
-                {
-                  id: "page-existing",
-                  archived: false,
-                  parent: { page_id: "parent" },
-                  properties: { title: { title: [{ plain_text: "Madison · Creator Hub" }] } },
-                },
-              ],
+              results: markers.map((text) => ({
+                paragraph: { rich_text: [{ plain_text: text }] },
+              })),
             }),
           ),
         );
-      created += 1;
+      }
+      options.onCreate?.();
       return Promise.resolve(new Response(JSON.stringify({ id: "page-duplicate" })));
     };
-    const provider = new LiveNotionProvider("token", "parent", store, request);
+  }
+
+  it("recovers an orphaned Notion page carrying this creator's provisioning marker", async () => {
+    // Simulates a crash between creating the page and persisting its id: the
+    // store is empty, but the page already exists under the parent.
+    let created = 0;
+    const request = notionFake({
+      searchResults: [
+        {
+          id: "page-existing",
+          archived: false,
+          parent: { page_id: "parent" },
+          properties: { title: { title: [{ plain_text: "Madison · Creator Hub" }] } },
+        },
+      ],
+      childrenByPage: { "page-existing": [provisioningMarker("notion:1")] },
+      onCreate: () => {
+        created += 1;
+      },
+    });
+    const provider = new LiveNotionProvider("token", "parent", new MemoryResourceStore(), request);
     const resource = await provider.createCreatorHub({
       creatorId: "1",
       stageName: "Madison",
@@ -151,6 +255,37 @@ describe("live provider adapters", () => {
     });
     expect(resource.externalId).toBe("page-existing");
     expect(created).toBe(0);
+  });
+
+  it("never adopts a namesake creator's hub page", async () => {
+    // The critical case: two creators share the stage name "Madison", so both
+    // hubs have the identical title. Matching on title alone would hand creator
+    // B creator A's page — and that page is readable by the creator.
+    let created = 0;
+    const request = notionFake({
+      searchResults: [
+        {
+          id: "page-belonging-to-creator-a",
+          archived: false,
+          parent: { page_id: "parent" },
+          properties: { title: { title: [{ plain_text: "Madison · Creator Hub" }] } },
+        },
+      ],
+      // That page carries creator A's marker, not creator B's.
+      childrenByPage: { "page-belonging-to-creator-a": [provisioningMarker("notion:creator-a")] },
+      onCreate: () => {
+        created += 1;
+      },
+    });
+    const provider = new LiveNotionProvider("token", "parent", new MemoryResourceStore(), request);
+    const resource = await provider.createCreatorHub({
+      creatorId: "creator-b",
+      stageName: "Madison",
+      idempotencyKey: "notion:creator-b",
+    });
+    expect(resource.externalId).toBe("page-duplicate");
+    expect(resource.externalId).not.toBe("page-belonging-to-creator-a");
+    expect(created).toBe(1);
   });
 
   it("ignores an archived or differently-parented page when reconciling", async () => {

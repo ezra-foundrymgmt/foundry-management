@@ -16,6 +16,7 @@
     "@creatoros/integrations": "workspace:*"
   },
   "devDependencies": {
+    "@types/node": "^26.4.1",
     "eslint": "latest",
     "typescript": "^6.0.0",
     "vitest": "latest"

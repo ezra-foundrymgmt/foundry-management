@@ -132,6 +132,9 @@ importers:
 
   packages/integrations:
     devDependencies:
+      '@types/node':
+        specifier: ^26.4.1
+        version: 26.4.1
       eslint:
         specifier: latest
         version: 10.9.1(jiti@2.7.0)
@@ -148,6 +151,9 @@ importers:
         specifier: workspace:*
         version: link:../integrations
     devDependencies:
+      '@types/node':
+        specifier: ^26.4.1
+        version: 26.4.1
       eslint:
         specifier: latest
         version: 10.9.1(jiti@2.7.0)
