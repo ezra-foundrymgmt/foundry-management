@@ -39,8 +39,11 @@ and the Slack Request URL, because both need a reachable HTTPS endpoint.
 
 ## 1. Supabase
 
-There are **11 migrations** in `supabase/migrations`. None has ever been executed
-against a real Postgres, so their correctness is asserted, not proven.
+There are **12 migrations** in `supabase/migrations`. The test suite replays all
+of them against a real PostgreSQL engine on every run, so the chain itself is
+proven. What is not proven is the chain against _Supabase_ — its `auth` schema,
+its role definitions, `pgcrypto`, PostgREST, and a database that already has data
+in it. That is what the steps below establish.
 
 ### 1.1 Create a staging project — BLOCKING
 

@@ -26,12 +26,20 @@ The Vercel project is linked but nothing has been deployed. CreatorOS is not
 reachable from anywhere, so it still depends on localhost in practice. The
 hosted PWA cannot be installed until a deployment exists.
 
-### The migration chain has never been replayed — CREDENTIAL BLOCKED
+### The migration chain replays on Postgres, but not yet on Supabase — PARTIAL
 
-There are eleven migrations. They have been reviewed statically but never
-executed in order against a real Postgres. No Docker and no `psql` are available
-on the build machine, and per instruction nothing destructive was run against
-the live Foundry project. **Fresh-replay success is unproven.**
+There are twelve migrations. The domain test suite replays all of them in order,
+plus the seed, against a real PostgreSQL engine (pglite, Postgres compiled to
+WASM) on every test run, and asserts RLS and grant behaviour against it. That is
+machine verification, not inspection — it is what caught the ON CONFLICT defect
+that would have stopped every activation, and it reproduces the exact error.
+
+What it does not cover is a real Supabase project: GoTrue's `auth` schema, the
+`anon`/`authenticated`/`service_role` roles as Supabase actually defines them,
+`pgcrypto` (the suite skips that extension because pglite omits the control
+file), PostgREST's own SQL generation, and an existing database with data in it.
+**Replay against a staging Supabase project is still required** and is the first
+blocking item in `docs/HUMAN_ACTIONS.md`.
 
 One replay-blocking defect was found and fixed by inspection: `seed.sql`
 collided with migration 0005 on three tables and aborted every `db:reset`. All
@@ -197,3 +205,33 @@ Stated so the list above is not read as "nothing works":
 - The Notion creator-facing projection allowlist.
 - Per-step durable activation with correct resume and idempotency semantics.
 - Mock mode can no longer be deployed.
+
+### Adversarial security re-review — findings closed
+
+A 13-agent adversarial audit ran over seven dimensions after the live wiring:
+live/mock fallback, credentials and RLS, route authorization, Slack ingress and
+identity, agent tool permissions, Notion projection, and workflow/scheduler.
+Nineteen candidates, six adversarially verified, five confirmed. All are fixed
+and covered by tests; three were proved by reintroducing the defect and watching
+the test fail.
+
+Two of the confirmed findings meant CreatorOS could not have worked at all: every
+role check was bypassable through PostgREST with a browser access token, and no
+creator could ever have reached ACTIVE because three activation upserts named a
+conflict target PostgreSQL cannot infer.
+
+One finding was **refuted** and is recorded as refuted rather than fixed: the env
+templates omit `PRODUCTION_SUPABASE_PROJECT_REF`, but four operator documents
+instruct setting it in every environment, and the guard is enforced again at
+runtime when the service-role client is constructed.
+
+The audit reasoned about code, not a running system. It cannot substitute for the
+live gates in `docs/HUMAN_ACTIONS.md` — a real Slack signature, a real revoked
+token, a real cross-tenant request.
+
+### No weekly review producer — MISSING
+
+`SCHEDULE_WEEKLY_REVIEW` creates a WEEKLY schedule row and `weekly_creator_reports`
+exists, but nothing generates one. The scheduler records
+`WEEKLY_REVIEW_NOT_IMPLEMENTED` against the schedule rather than regenerating that
+day's daily report, which is what it silently did before.
