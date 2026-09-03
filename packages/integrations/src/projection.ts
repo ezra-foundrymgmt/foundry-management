@@ -64,18 +64,57 @@ function isProjectableField(field: string): field is ProjectableCreatorField {
   return (PROJECTABLE_CREATOR_FIELDS as readonly string[]).includes(field);
 }
 
-/** Confusable Latin letters, folded so homoglyph substitution cannot evade a pattern. */
+/**
+ * Letters that render as Latin but are not, folded so a homoglyph cannot walk a
+ * restricted phrase past the value screen.
+ *
+ * Greek was missing, which an adversarial audit demonstrated: "cοntribution
+ * margin" spelled with a Greek omicron passed, while the Cyrillic spelling of
+ * the same string was correctly refused — so the class read as closed when only
+ * one script in it was. Dotless i was missing for the same reason.
+ *
+ * The tests cover this table by code point, because the entries here are
+ * indistinguishable from Latin on screen and a reviewer cannot check them by
+ * eye.
+ */
 const CONFUSABLES: ReadonlyArray<[RegExp, string]> = [
+  // Cyrillic
   [/[аА]/g, "a"],
+  [/[вВ]/g, "b"],
+  [/[сС]/g, "c"],
+  [/[ԁ]/g, "d"],
   [/[еЕ]/g, "e"],
+  [/[һНн]/g, "h"],
+  [/[іІ]/g, "i"],
+  [/[кК]/g, "k"],
+  [/[мМ]/g, "m"],
   [/[оО]/g, "o"],
   [/[рР]/g, "p"],
-  [/[сС]/g, "c"],
+  [/[ѕ]/g, "s"],
+  [/[тТ]/g, "t"],
   [/[хХ]/g, "x"],
   [/[уУ]/g, "y"],
-  [/[іІ]/g, "i"],
-  [/[ԁ]/g, "d"],
-  [/[ѕ]/g, "s"],
+  // Greek
+  [/[αΑ]/g, "a"],
+  [/[Β]/g, "b"],
+  [/[εΕ]/g, "e"],
+  [/[Η]/g, "h"],
+  [/[ιΙ]/g, "i"],
+  [/[κΚ]/g, "k"],
+  [/[Μ]/g, "m"],
+  [/[Ν]/g, "n"],
+  [/[οΟ]/g, "o"],
+  [/[ρΡ]/g, "p"],
+  [/[τΤ]/g, "t"],
+  [/[μ]/g, "u"],
+  [/[ν]/g, "v"],
+  [/[χΧ]/g, "x"],
+  [/[Υ]/g, "y"],
+  [/[Ζ]/g, "z"],
+  // Latin letters that survive NFKC unchanged
+  [/[ıɩ]/g, "i"],
+  [/[ł]/g, "l"],
+  [/[ɡ]/g, "g"],
 ];
 
 /**
@@ -91,9 +130,17 @@ const CONFUSABLES: ReadonlyArray<[RegExp, string]> = [
  */
 function canonicalize(value: string): string {
   let canonical = value.normalize("NFKC");
-  // Cf (format) characters written as escapes so they are visible in review:
-  // soft hyphen, zero-width space/non-joiner/joiner, bidi marks, word joiner, BOM.
-  canonical = canonical.replace(/[\u00AD\u200B-\u200F\u2060\uFEFF]/g, "");
+  // Every format character, by Unicode property rather than by list. The list
+  // version named six ranges and missed the rest, and an audit walked
+  // "contribution margin" past it with an invisible-times operator, a bidi
+  // isolate and a variation selector, none of which a reader sees. The property
+  // is the whole class, so it cannot fall behind a Unicode revision.
+  canonical = canonical.replace(/\p{Cf}/gu, "");
+  // Invisible combining marks are Mn, not Cf: the combining grapheme joiner and
+  // the variation selectors, written as escapes because they render as nothing.
+  // Only those, because stripping all of Mn would mangle ordinary accented and
+  // Indic text.
+  canonical = canonical.replace(/[\u034F\uFE00-\uFE0F]/g, "");
   for (const [pattern, replacement] of CONFUSABLES)
     canonical = canonical.replace(pattern, replacement);
   return canonical.replace(/\s+/g, " ").toLowerCase();

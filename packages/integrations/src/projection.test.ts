@@ -117,3 +117,45 @@ describe("creator-facing projection boundary", () => {
     }
   });
 });
+
+/**
+ * The exact strings an adversarial audit walked past the value screen. Every one
+ * renders to a human as ordinary Latin text, so they are built from code points
+ * rather than typed — a reviewer cannot check them by eye, and a copy-paste
+ * through any tool that normalises would silently turn the test into a tautology.
+ */
+describe("homoglyph and invisible-character evasions", () => {
+  const cp = (...codes: number[]) => String.fromCodePoint(...codes);
+
+  const EVASIONS: ReadonlyArray<[string, string]> = [
+    ["Greek omicron", `c${cp(0x3bf)}ntribution margin 41%`],
+    ["Greek rho", `${cp(0x3c1)}&l summary`],
+    ["Greek alpha", `contribution m${cp(0x3b1)}rgin`],
+    ["variation selector", `contribution${cp(0xfe0f)}margin is 41%`],
+    ["invisible times", `contribution${cp(0x2062)}margin is 41%`],
+    ["combining grapheme joiner", `contribution${cp(0x34f)}margin`],
+    ["bidi isolate", `contribution${cp(0x2066)} margin`],
+    ["dotless i", `contr${cp(0x131)}bution margin`],
+    ["Cyrillic o", `c${cp(0x43e)}ntribution margin`],
+    ["zero-width space", `contribution${cp(0x200b)}margin`],
+  ];
+
+  for (const [label, value] of EVASIONS)
+    it(`refuses contribution margin hidden with a ${label}`, () => {
+      expect(() => assertProjectableFields({ performanceSummary: value })).toThrow(
+        ProjectionBoundaryError,
+      );
+    });
+
+  it("still accepts the ordinary creator-facing copy these could be confused with", () => {
+    // The screen has to stay usable. Over-folding that refused normal English
+    // would push someone to route around the boundary rather than through it.
+    expect(() =>
+      assertProjectableFields({
+        performanceSummary: "Reach up 12% and first-purchase conversion up 3 points.",
+        approvedGrowthStrategy: "Post three Discovery pieces a week; margin of error is ±2%.",
+        resources: "Café checklist, naïve-fan FAQ, résumé of last quarter.",
+      }),
+    ).not.toThrow();
+  });
+});
