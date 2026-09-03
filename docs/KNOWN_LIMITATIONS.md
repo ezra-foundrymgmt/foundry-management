@@ -28,14 +28,14 @@ hosted PWA cannot be installed until a deployment exists.
 
 ### The migration chain has never been replayed — CREDENTIAL BLOCKED
 
-There are seven migrations. They have been reviewed statically but never
+There are nine migrations. They have been reviewed statically but never
 executed in order against a real Postgres. No Docker and no `psql` are available
 on the build machine, and per instruction nothing destructive was run against
 the live Foundry project. **Fresh-replay success is unproven.**
 
 One replay-blocking defect was found and fixed by inspection: `seed.sql`
 collided with migration 0005 on three tables and aborted every `db:reset`. All
-seven inserts are now idempotent. That fix is itself unverified against a real
+seven seed inserts are now idempotent. That fix is itself unverified against a real
 database.
 
 ### RLS and tenant isolation are unproven against a real database — CREDENTIAL BLOCKED
@@ -82,29 +82,42 @@ with a zero score rather than inventing a health measurement, and
 `requestRevenueIntegration` creates the row as `NOT_CONFIGURED` — it is a
 request for a human to connect an account, never a claim that one is connected.
 
-### Most pages still render fictional seed data — PARTIAL
+### Several pages still render fictional seed data — PARTIAL
 
-Only `/creators`, `/crm/prospects` and `/audit` read from Supabase. The command
-centre, creator detail, tasks, reports, experiments, content, economics,
-incidents, workflows and applications pages render fixtures from
-`packages/domain/src/seed.ts` — Madison Carter, Ava Monroe, Sarah Vale and their
-numbers are fictional and identical in every environment.
+`/creators`, `/crm/prospects`, `/audit` and `/workflows` read from Supabase.
+Still on fixtures from `packages/domain/src/seed.ts`: the command centre,
+creator detail, tasks, reports, experiments, content, economics, incidents and
+applications. Madison Carter, Ava Monroe, Sarah Vale and their numbers are
+fictional and identical in every environment on those pages.
 
-`/workflows` in particular hardcodes progress rather than reading
-`workflow_runs`, so it does not reflect real activation state.
+`/creators/[creatorId]` is the most misleading of the remaining ones: the Brand
+Dossier, operating state and data-quality panels are hardcoded rather than read
+from `creator_brand_profiles`, `creator_truth_items` and `creator_boundaries`.
 
-### CRM is read-only — PARTIAL
+### CRM prospects are writable — MACHINE VERIFIED
 
-There is no create, edit, stage change, owner assignment, follow-up, activity
-log, note, or archive for prospects. The search inputs on `/creators` and
-`/crm/prospects` and the "Filters" buttons render but do nothing. "Add prospect"
-and "Add creator" are disabled. Prospect → creator conversion works.
+Create, stage change, owner, follow-up, activity log, note and archive all
+persist through `/api/prospects*`. Search and a follow-up-due filter work.
+Duplicate prevention matches on email, else on a normalised name, and names the
+existing prospect number. Archive is a soft delete. 14 tests cover it.
 
-### No daily report producer — MISSING
+Still missing on the CRM: a create form in the UI (the API exists and is tested,
+but nothing on the page calls it), owner reassignment UI, and the equivalent
+write surface for `/crm/applications`.
 
-Nothing writes to `daily_creator_reports`. The Inngest report function reads
-from the seed fixture, not the table. The reports page will stay empty against a
-real database.
+### Daily reports are produced from real data — MACHINE VERIFIED
+
+`produceDailyCreatorReport` reads the creator's own frozen baseline, sums the
+trailing window from `creator_revenue_daily` and `social_posts`, runs the rules
+engine, and upserts into `daily_creator_reports`.
+
+It refuses when the creator is not in the organization, when no baseline has
+been frozen, or when no metrics exist — writing nothing and reporting the reason
+rather than producing a report whose comparisons would be invented.
+
+Nothing schedules it yet. `creator_report_schedules` rows are created during
+activation, but no cron or scheduled Inngest function reads them, so reports are
+only produced when the event is sent manually.
 
 ### Slack identity mapping is manual — PARTIAL
 
@@ -131,20 +144,20 @@ confirmed and deliberately left, with the reasoning:
 
 ## Smaller, specific gaps
 
-| Area                        | Status                    | Detail                                                                                                                                                                                                                                                |
-| --------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Notion duplicate page       | PARTIAL                   | Store lookup plus title reconcile. Notion's search index is eventually consistent, so a crash-and-retry inside the indexing window can still create a second hub page. Notion offers no create-if-absent, so this cannot be fully closed client-side. |
-| `database.types.ts`         | PARTIAL                   | A 26-line stub, not generated types. Supabase queries are effectively untyped; a column rename would compile fine and fail at runtime.                                                                                                                |
-| Observability               | PARTIAL                   | `logEvent` writes structured JSON to stdout with key-based redaction. There is no Sentry wiring, no alerting, and no error aggregation. `SENTRY_DSN` is accepted and unused.                                                                          |
-| Rate limiting               | PARTIAL                   | A DB-backed `consume_api_rate_limit` function exists and is used on write routes. Reads and the Slack ingress are unlimited.                                                                                                                          |
-| Audit coverage              | PARTIAL                   | Integration connects and some mutations append audit events. Not every write is audited.                                                                                                                                                              |
-| `audit_events` immutability | MACHINE VERIFIED (static) | UPDATE and DELETE blocked by trigger; TRUNCATE blocked by a statement trigger added in migration 0006. Never executed.                                                                                                                                |
-| e2e coverage                | PARTIAL                   | Six Playwright tests, all in mock mode as an unauthenticated super_admin. Nothing exercises real auth, multi-user, or live data. CI does not run them and does not install browsers.                                                                  |
-| Multi-user                  | MISSING                   | Ezra and Payton have no accounts yet. Concurrent-editing behaviour is untested.                                                                                                                                                                       |
-| Offboarding                 | PARTIAL                   | `OFFBOARDING_STEPS` is a nine-step list with no executor.                                                                                                                                                                                             |
-| Google Workspace            | MISSING                   | Deliberately out of scope. `ManualFileStorageProvider` returns a placeholder.                                                                                                                                                                         |
-| OnlyFans                    | MISSING by design         | `OnlyFansProviderPlaceholder` returns `NOT_CONFIGURED` and performs no scraping or unofficial automation. Correct and intentional.                                                                                                                    |
-| Backups                     | MISSING                   | No backup or restore procedure has been tested. Supabase's own backups are whatever the project's plan provides.                                                                                                                                      |
+| Area                        | Status                    | Detail                                                                                                                                                                                                                                                                                             |
+| --------------------------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Notion duplicate page       | PARTIAL                   | Store lookup plus title reconcile. Notion's search index is eventually consistent, so a crash-and-retry inside the indexing window can still create a second hub page. Notion offers no create-if-absent, so this cannot be fully closed client-side.                                              |
+| `database.types.ts`         | PARTIAL                   | A 26-line stub, not generated types. Supabase queries are effectively untyped; a column rename would compile fine and fail at runtime.                                                                                                                                                             |
+| Observability               | PARTIAL                   | Structured logging plus `captureException`, which reports to Sentry when `SENTRY_DSN` is set and is a no-op otherwise. Never verified against Sentry — the payload shape is correct by documentation only. There is still no alerting and no aggregation, and client-side errors are not captured. |
+| Rate limiting               | PARTIAL                   | A DB-backed `consume_api_rate_limit` function exists and is used on write routes. Reads and the Slack ingress are unlimited.                                                                                                                                                                       |
+| Audit coverage              | PARTIAL                   | Integration connects and some mutations append audit events. Not every write is audited.                                                                                                                                                                                                           |
+| `audit_events` immutability | MACHINE VERIFIED (static) | UPDATE and DELETE blocked by trigger; TRUNCATE blocked by a statement trigger added in migration 0006. Never executed.                                                                                                                                                                             |
+| e2e coverage                | PARTIAL                   | Six Playwright tests, all in mock mode as an unauthenticated super_admin. Nothing exercises real auth, multi-user, or live data. CI does not run them and does not install browsers.                                                                                                               |
+| Multi-user                  | MISSING                   | Ezra and Payton have no accounts yet. Concurrent-editing behaviour is untested.                                                                                                                                                                                                                    |
+| Offboarding                 | PARTIAL                   | `OFFBOARDING_STEPS` is a nine-step list with no executor.                                                                                                                                                                                                                                          |
+| Google Workspace            | MISSING                   | Deliberately out of scope. `ManualFileStorageProvider` returns a placeholder.                                                                                                                                                                                                                      |
+| OnlyFans                    | MISSING by design         | `OnlyFansProviderPlaceholder` returns `NOT_CONFIGURED` and performs no scraping or unofficial automation. Correct and intentional.                                                                                                                                                                 |
+| Backups                     | MISSING                   | No backup or restore procedure has been tested. Supabase's own backups are whatever the project's plan provides.                                                                                                                                                                                   |
 
 ## Things that are genuinely solid
 
