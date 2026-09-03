@@ -10,6 +10,7 @@ import {
   hashOAuthState,
 } from "@/lib/integration-crypto";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { appendAudit } from "@/lib/audit";
 
 export type OAuthProvider = "SLACK" | "NOTION";
 
@@ -302,26 +303,6 @@ export async function disconnectIntegration(session: AppSession, provider: OAuth
     parsedConnection.data.id,
     {},
   );
-}
-
-async function appendAudit(
-  session: AppSession,
-  action: string,
-  resourceType: string,
-  resourceId: string,
-  metadata: Record<string, unknown>,
-) {
-  const { error } = await requireAdmin().from("audit_events").insert({
-    organization_id: session.organizationId,
-    actor_type: "user",
-    actor_user_id: session.userId,
-    action,
-    resource_type: resourceType,
-    resource_id: resourceId,
-    metadata_json: metadata,
-    correlation_id: crypto.randomUUID(),
-  });
-  if (error) throw new Error(`AUDIT_APPEND_FAILED: ${error.message}`);
 }
 
 export class SupabaseProviderResourceStore implements ProviderResourceStore {

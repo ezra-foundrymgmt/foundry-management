@@ -396,6 +396,33 @@ h3 {
 .trend-unknown {
   color: var(--ink-soft);
 }
+.kanban-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+.kanban-actions .input {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  padding: 4px 6px;
+}
+.kanban-actions .button {
+  font-size: 11px;
+  padding: 4px 8px;
+}
+/* Available to screen readers, removed from the visual layout. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 .section-head {
   min-height: 51px;
   display: flex;
