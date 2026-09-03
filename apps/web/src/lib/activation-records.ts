@@ -1,7 +1,22 @@
 import "server-only";
+import type { WorkDepartment } from "@creatoros/domain";
 import type { ActivationRecordPort, OnboardingCreator } from "@creatoros/workflows";
 import { COMPETITOR_RESEARCH_KEY, evaluateActivationReadiness } from "@/lib/activation-readiness";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+
+/**
+ * These tasks predate WORK_DEPARTMENTS and were written with their own casing
+ * ("GROWTH", "CREATOR_SUCCESS") — a second, silently divergent department
+ * vocabulary from the one apps/web/src/lib/tasks.ts and task-create-form.tsx
+ * actually validate against and render. tasks.department is free text, so
+ * nothing enforced the two ever matching; the Tasks page's department filter
+ * and any future department-scoped query would treat "GROWTH" and "Growth" as
+ * unrelated values for tasks that are, in every other respect, the same kind
+ * of work. Typed against WorkDepartment so a future rename of the canonical
+ * list fails this file at compile time instead of drifting again silently.
+ */
+const GROWTH: WorkDepartment = "Growth";
+const CREATOR_SUCCESS: WorkDepartment = "Creator Success";
 
 /**
  * Supabase implementation of the activation bookkeeping steps.
@@ -136,7 +151,7 @@ export class SupabaseActivationRecordPort implements ActivationRecordPort {
       {
         creator_id: creator.id,
         title: `Complete competitor research for ${creator.stageName}`,
-        department: "GROWTH",
+        department: GROWTH,
         status: "OPEN",
         priority: "MEDIUM",
         requested_by: this.actorUserId,
@@ -166,11 +181,11 @@ export class SupabaseActivationRecordPort implements ActivationRecordPort {
 
   async createInternalTasks(creator: OnboardingCreator): Promise<void> {
     const tasks = [
-      { title: `Collect baseline metrics for ${creator.stageName}`, department: "GROWTH" },
-      { title: `Complete Brand Dossier for ${creator.stageName}`, department: "CREATOR_SUCCESS" },
+      { title: `Collect baseline metrics for ${creator.stageName}`, department: GROWTH },
+      { title: `Complete Brand Dossier for ${creator.stageName}`, department: CREATOR_SUCCESS },
       {
         title: `Confirm content boundaries with ${creator.stageName}`,
-        department: "CREATOR_SUCCESS",
+        department: CREATOR_SUCCESS,
       },
     ];
     for (const task of tasks)
@@ -231,7 +246,7 @@ export class SupabaseActivationRecordPort implements ActivationRecordPort {
       {
         creator_id: creator.id,
         title: `Import 30-day baseline for ${creator.stageName}`,
-        department: "GROWTH",
+        department: GROWTH,
         status: "OPEN",
         priority: "HIGH",
         requested_by: this.actorUserId,
@@ -271,7 +286,7 @@ export class SupabaseActivationRecordPort implements ActivationRecordPort {
       {
         creator_id: creator.id,
         title: `Send welcome package to ${creator.stageName}`,
-        department: "CREATOR_SUCCESS",
+        department: CREATOR_SUCCESS,
         status: "OPEN",
         priority: "MEDIUM",
         requested_by: this.actorUserId,
