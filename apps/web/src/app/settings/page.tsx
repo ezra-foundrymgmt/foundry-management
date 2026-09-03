@@ -1,3 +1,4 @@
+import Link from "next/link";
 import {
   Activity,
   Building2,
@@ -12,6 +13,14 @@ import {
   Users,
 } from "lucide-react";
 import { DemoStrip, PageHeader } from "@/components/page-header";
+
+/**
+ * A roadmap of Foundry's configuration surface, not all of it built yet.
+ * "Integrations" is the one section that already exists elsewhere
+ * (/settings/integrations) — everything else here is a real destination this
+ * page does not have. Only sections with an href are ever links; the rest stay
+ * static so nothing here promises a page that isn't there.
+ */
 const sections = [
   {
     name: "Organization",
@@ -31,7 +40,12 @@ const sections = [
     desc: "Target, warning, and critical buffer levels",
     icon: Activity,
   },
-  { name: "Integrations", desc: "Secure provider configuration and environments", icon: Plug },
+  {
+    name: "Integrations",
+    desc: "Secure provider configuration and environments",
+    icon: Plug,
+    href: "/settings/integrations",
+  },
   { name: "Reporting cadence", desc: "Daily, weekly, and monthly schedules", icon: CalendarClock },
   { name: "Naming conventions", desc: "Slack, Notion, and file resource patterns", icon: Network },
   { name: "Security", desc: "Sessions, policies, and access review", icon: Shield },
@@ -47,23 +61,39 @@ export default function SettingsPage() {
         subtitle="Operational thresholds are configuration—not hardcoded business law."
       />
       <div className="grid detail-grid">
-        {sections.map((item) => (
-          <article
-            className="card card-pad"
-            key={item.name}
-            style={{ display: "flex", gap: 13, alignItems: "flex-start" }}
-          >
-            <span className="icon-button">
-              <item.icon size={16} />
-            </span>
-            <div>
-              <h3>{item.name}</h3>
-              <p className="subtitle" style={{ lineHeight: 1.5 }}>
-                {item.desc}
-              </p>
-            </div>
-          </article>
-        ))}
+        {sections.map((item) => {
+          const content = (
+            <>
+              <span className="icon-button">
+                <item.icon size={16} />
+              </span>
+              <div>
+                <h3>{item.name}</h3>
+                <p className="subtitle" style={{ lineHeight: 1.5 }}>
+                  {item.desc}
+                </p>
+              </div>
+            </>
+          );
+          return item.href ? (
+            <Link
+              href={item.href}
+              className="card card-pad"
+              key={item.name}
+              style={{ display: "flex", gap: 13, alignItems: "flex-start" }}
+            >
+              {content}
+            </Link>
+          ) : (
+            <article
+              className="card card-pad"
+              key={item.name}
+              style={{ display: "flex", gap: 13, alignItems: "flex-start" }}
+            >
+              {content}
+            </article>
+          );
+        })}
       </div>
     </main>
   );

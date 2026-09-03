@@ -4,6 +4,7 @@ import { creators, reports, type DailyReport } from "@creatoros/domain";
 import { Check, ListChecks } from "lucide-react";
 import { z } from "zod";
 import { DemoStrip, PageHeader } from "@/components/page-header";
+import { LiveEmpty } from "@/components/live-empty";
 import { useDemoMode } from "@/components/mode-provider";
 import { StatusBadge } from "@/components/status-badge";
 export default function ReportsPage() {
@@ -92,6 +93,12 @@ export default function ReportsPage() {
           {message}
         </div>
       ) : null}
+      {reportRecords.length === 0 ? (
+        <LiveEmpty
+          title="No reports generated yet"
+          hint="Daily reports appear here once a creator has a frozen baseline and measured metrics to compare against it."
+        />
+      ) : (
       <div className="grid">
         {reportRecords.map((report) => {
           const made = created.includes(report.id);
@@ -168,6 +175,7 @@ export default function ReportsPage() {
           );
         })}
       </div>
+      )}
     </main>
   );
 }

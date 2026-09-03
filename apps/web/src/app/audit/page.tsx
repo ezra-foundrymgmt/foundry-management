@@ -52,21 +52,17 @@ export default async function AuditPage() {
         title="Audit trail"
         subtitle="Important changes are attributed to users, systems, workflows, integrations, or approved AI tools."
         actions={
-          <button
-            className="button"
-            disabled
-            title="Export is available after the live audit store is connected"
-          >
+          <button className="button" disabled title="Export is not built yet">
             <Download size={13} /> Export
           </button>
         }
       />
       <section className="card">
         <div className="table-toolbar">
-          <button className="button" disabled title="Saved filters require the live audit store">
+          <button className="button" disabled title="Actor filtering is not built yet">
             <Filter size={13} /> All actors
           </button>
-          <button className="button" disabled title="Saved filters require the live audit store">
+          <button className="button" disabled title="Resource filtering is not built yet">
             All resources
           </button>
           <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--ink-soft)" }}>
