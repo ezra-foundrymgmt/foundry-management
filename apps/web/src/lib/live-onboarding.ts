@@ -217,28 +217,47 @@ export class SupabaseOnboardingRepository implements OnboardingRepository {
     if (definition.error || !definition.data)
       throw new Error(`WORKFLOW_DEFINITION_FAILED: ${definition.error?.message ?? "unknown"}`);
     const workflowDefinition = z.object({ id: z.string().uuid() }).parse(definition.data);
-    const runWrite = await admin.from("workflow_runs").upsert({
-      id: run.id,
-      organization_id: this.organizationId,
-      creator_id: run.creatorId,
-      definition_id: workflowDefinition.id,
-      run_number: run.runNumber,
-      status: run.status,
-      // Per run, not per creator. workflow_runs carries an unconditional
-      // unique(organization_id, idempotency_key) covering every status, so a
-      // constant per-creator key meant a creator could be activated exactly once
-      // ever — a second activation after a completed one could not be inserted.
-      // The active-run fence is workflow_runs_one_active_creator_definition_uidx,
-      // which is partial and only covers non-terminal runs.
-      idempotency_key: run.id,
-      current_step: run.steps.find((step) => step.status === "RUNNING")?.name ?? null,
-      initiated_by: this.initiatedBy,
-      correlation_id: run.correlationId,
-      blockers_json: run.blockers,
-      started_at: run.createdAt,
-      completed_at: run.completedAt,
-    });
+    const runWrite = await admin
+      .from("workflow_runs")
+      .upsert({
+        id: run.id,
+        organization_id: this.organizationId,
+        creator_id: run.creatorId,
+        definition_id: workflowDefinition.id,
+        // run_number is deliberately omitted. #createRunLocked computes one from
+        // the creator's own number purely for the in-memory object and the
+        // memory-repository test path — it is the same value for every run a
+        // given creator ever has, so writing it here collides with
+        // workflow_runs' own unique(organization_id, run_number) the moment a
+        // creator needs a second run in the same year, which a BLOCKED or
+        // FAILED first attempt makes routine. The column's own DEFAULT
+        // (nextval('onboarding_number_seq')) is exactly the collision-free
+        // generator this needs, so on an actual insert Postgres assigns it; on
+        // an update-via-upsert this column is simply left untouched, which is
+        // also correct — a run's number does not change over its own lifetime.
+        status: run.status,
+        // Per run, not per creator. workflow_runs carries an unconditional
+        // unique(organization_id, idempotency_key) covering every status, so a
+        // constant per-creator key meant a creator could be activated exactly once
+        // ever — a second activation after a completed one could not be inserted.
+        // The active-run fence is workflow_runs_one_active_creator_definition_uidx,
+        // which is partial and only covers non-terminal runs.
+        idempotency_key: run.id,
+        current_step: run.steps.find((step) => step.status === "RUNNING")?.name ?? null,
+        initiated_by: this.initiatedBy,
+        correlation_id: run.correlationId,
+        blockers_json: run.blockers,
+        started_at: run.createdAt,
+        completed_at: run.completedAt,
+      })
+      .select("run_number")
+      .maybeSingle();
     if (runWrite.error) throw new Error(`WORKFLOW_RUN_SAVE_FAILED: ${runWrite.error.message}`);
+    // Reflects the database's real, collision-free value back onto the
+    // in-memory run rather than leaving it holding the placeholder
+    // #createRunLocked computed before this call ever reached the database.
+    const savedRunNumber = z.object({ run_number: z.string() }).safeParse(runWrite.data);
+    if (savedRunNumber.success) run.runNumber = savedRunNumber.data.run_number;
     const stepWrite = await admin.from("workflow_steps").upsert(
       run.steps.map((step, ordinal) => ({
         organization_id: this.organizationId,
