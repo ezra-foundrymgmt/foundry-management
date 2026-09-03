@@ -55,19 +55,36 @@ export interface ContentPerformance {
   status: "OPPORTUNITY" | "BASELINE" | "WEAK";
 }
 
+/**
+ * The canonical priority ladder for work items — report recommendations, tasks,
+ * and a creator's own operational priority. One list so the write surfaces, the
+ * rules engine and the UI cannot drift apart.
+ */
+export const WORK_PRIORITIES = ["CRITICAL", "HIGH", "MEDIUM", "LOW"] as const;
+export type WorkPriority = (typeof WORK_PRIORITIES)[number];
+
+/**
+ * The canonical department ladder for work items — report recommendations and
+ * tasks. Same reasoning as WORK_PRIORITIES: one list so the rules engine, the
+ * task write surfaces and the create-task UI cannot drift apart.
+ */
+export const WORK_DEPARTMENTS = [
+  "Growth",
+  "Creative",
+  "Creator Success",
+  "Revenue",
+  "Operations",
+  "Security",
+  "Compliance",
+] as const;
+export type WorkDepartment = (typeof WORK_DEPARTMENTS)[number];
+
 export interface Recommendation {
   id: string;
-  department:
-    | "Growth"
-    | "Creative"
-    | "Creator Success"
-    | "Revenue"
-    | "Operations"
-    | "Security"
-    | "Compliance";
+  department: WorkDepartment;
   action: string;
   evidence: string;
-  priority: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
+  priority: WorkPriority;
   suggestedOwner: string;
   dueInDays: number;
   confidence: DataConfidence;

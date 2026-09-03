@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { WORK_DEPARTMENTS, WORK_PRIORITIES } from "@creatoros/domain";
 import { AuthorizationError, requirePermission } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
@@ -9,8 +10,11 @@ const reportSchema = z.object({
   recommendations_json: z.array(
     z.object({
       id: z.string().optional(),
-      department: z.string().min(1).max(80),
-      priority: z.string().min(1).max(40),
+      // Matches Recommendation's own type in @creatoros/domain: a report-sourced
+      // task must land on the same priority/department ladder a hand-created one
+      // does, or the Tasks page's priority control cannot represent it.
+      department: z.enum(WORK_DEPARTMENTS),
+      priority: z.enum(WORK_PRIORITIES),
       action: z.string().min(1).max(500),
     }),
   ),

@@ -2,21 +2,42 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { AuthorizationError, requirePermission } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { TaskError, taskPrioritySchema, updateTaskPriority } from "@/lib/tasks";
 
 const bodySchema = z.object({
   status: z.enum(["IN_PROGRESS", "DONE"]),
-  updatedAt: z.string().datetime(),
+  // PostgREST always serializes timestamptz with a numeric offset (+00:00),
+  // never a bare Z, so the concurrency token round-tripped from a GET must be
+  // accepted in that form or every live status change is refused as invalid
+  // input before it ever reaches the database.
+  updatedAt: z.string().datetime({ offset: true }),
 });
 const taskSchema = z.object({ id: z.string().uuid(), status: z.string(), updated_at: z.string() });
 
 export async function PATCH(request: Request, context: { params: Promise<{ taskId: string }> }) {
   try {
-    const session = await requirePermission("task.complete");
     const taskId = z
       .string()
       .uuid()
       .parse((await context.params).taskId);
-    const body = bodySchema.safeParse(await request.json());
+    const raw: unknown = await request.json();
+
+    /**
+     * Re-triaging priority and moving a task through its status are different
+     * authorizations, so they are checked separately rather than sharing one
+     * gate. `task.complete` is held by contractors and editors — the people who
+     * do the work — while changing what is urgent is a management decision, so
+     * priority requires `task.assign` (super_admin and creator_success).
+     */
+    if (raw !== null && typeof raw === "object" && "priority" in raw) {
+      const session = await requirePermission("task.assign");
+      const body = taskPrioritySchema.safeParse(raw);
+      if (!body.success) return NextResponse.json({ error: "INVALID_INPUT" }, { status: 400 });
+      return NextResponse.json(await updateTaskPriority(session, taskId, body.data));
+    }
+
+    const session = await requirePermission("task.complete");
+    const body = bodySchema.safeParse(raw);
     if (!body.success) return NextResponse.json({ error: "INVALID_INPUT" }, { status: 400 });
     const client = createSupabaseAdminClient();
     if (!client) return NextResponse.json({ error: "DATABASE_NOT_CONFIGURED" }, { status: 503 });
@@ -65,6 +86,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ taskI
     return NextResponse.json({ id: taskId, status: body.data.status, updatedAt });
   } catch (error) {
     if (error instanceof AuthorizationError)
+      return NextResponse.json({ error: error.message }, { status: error.status });
+    if (error instanceof TaskError)
       return NextResponse.json({ error: error.message }, { status: error.status });
     if (error instanceof z.ZodError)
       return NextResponse.json({ error: "INVALID_TASK_ID" }, { status: 400 });

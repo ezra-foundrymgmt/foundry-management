@@ -795,6 +795,10 @@ export interface LiveCreatorDetail {
     startDate: string | null;
     timezone: string | null;
     primaryPlatform: string | null;
+    /** Null means nobody has triaged this creator yet, not that it is low. */
+    priority: string | null;
+    /** The optimistic-concurrency token the priority control sends back. */
+    updatedAt: string;
   };
   latestReport: LiveReportRow | null;
   tasks: LiveTaskRow[];
@@ -819,7 +823,7 @@ export async function getLiveCreatorDetail(creatorId: string): Promise<LiveCreat
   const creatorResult = await client
     .from("creators")
     .select(
-      "id,creator_number,stage_name,status,current_health_score,current_health_status,current_content_buffer_days,assigned_creator_success_user_id,assigned_growth_user_id,contract_status,jurisdiction_review_status,adult_confirmation_status,start_date,timezone,primary_platform",
+      "id,creator_number,stage_name,status,current_health_score,current_health_status,current_content_buffer_days,assigned_creator_success_user_id,assigned_growth_user_id,contract_status,jurisdiction_review_status,adult_confirmation_status,start_date,timezone,primary_platform,priority,updated_at",
     )
     .eq("organization_id", session.organizationId)
     .eq("id", creatorId)
@@ -842,6 +846,8 @@ export async function getLiveCreatorDetail(creatorId: string): Promise<LiveCreat
       start_date: z.string().nullable(),
       timezone: z.string().nullable(),
       primary_platform: z.string().nullable(),
+      priority: z.string().nullable(),
+      updated_at: z.string(),
     })
     .safeParse(creatorResult.data);
   // A creator in another organization resolves to nothing, exactly like one that
@@ -984,6 +990,8 @@ export async function getLiveCreatorDetail(creatorId: string): Promise<LiveCreat
       startDate: row.start_date,
       timezone: row.timezone,
       primaryPlatform: row.primary_platform,
+      priority: row.priority,
+      updatedAt: row.updated_at,
     },
     latestReport: report.success
       ? {

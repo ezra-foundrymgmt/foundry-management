@@ -6,6 +6,7 @@ import {
 } from "@creatoros/domain";
 import { ArrowLeft } from "lucide-react";
 import { AccessDenied } from "@/components/access-denied";
+import { CreatorPriorityControl } from "@/components/creator-priority-control";
 import { OnboardingButton } from "@/components/onboarding-button";
 import { ReadinessPanel, type ReadinessState } from "@/components/readiness-panel";
 import { StatusBadge } from "@/components/status-badge";
@@ -45,6 +46,8 @@ function demoDetail(creatorId: string): LiveCreatorDetail | null {
       startDate: "2026-09-01",
       timezone: "America/Los_Angeles",
       primaryPlatform: "Instagram",
+      priority: null,
+      updatedAt: "2026-09-01T00:00:00.000Z",
     },
     latestReport: report
       ? {
@@ -176,6 +179,12 @@ export default async function CreatorPage({ params }: { params: Promise<{ creato
             <StatusBadge value={creator.integrationHealth} />
           </div>
         </article>
+        <CreatorPriorityControl
+          creatorId={creator.id}
+          priority={creator.priority}
+          updatedAt={creator.updatedAt}
+          readOnly={mock}
+        />
       </section>
 
       <div className="grid dashboard-grid">
