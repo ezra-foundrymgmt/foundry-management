@@ -155,20 +155,44 @@ export async function saveIntegrationConnection(input: {
   return savedConnection.id;
 }
 
+/**
+ * A stored token is usable while the workspace is still authorized.
+ *
+ * DEGRADED is deliberately included. It means "the last health check failed",
+ * which is usually a transient provider outage, not an invalid token. Excluding
+ * it deadlocked the integration: one failed check set DEGRADED, that made the
+ * token unreadable, and the health check needs the token to run — so the
+ * connection could never return to CONNECTED without a full reinstall.
+ *
+ * Genuine revocation is carried by needs_reauthorization, which health checks
+ * set when the provider answers invalid_auth or token_revoked. That, and only
+ * that, makes the token unusable.
+ */
+export function isTokenUsable(connection: {
+  status: string;
+  needs_reauthorization?: boolean | null | undefined;
+}): boolean {
+  if (connection.needs_reauthorization === true) return false;
+  return connection.status === "CONNECTED" || connection.status === "DEGRADED";
+}
+
 export async function getIntegrationToken(organizationId: string, provider: OAuthProvider) {
   const admin = requireAdmin();
   const { data: connection, error } = await admin
     .from("integration_connections")
-    .select("id,status")
+    .select("id,status,needs_reauthorization")
     .eq("organization_id", organizationId)
     .eq("provider", provider)
     .is("creator_id", null)
     .maybeSingle();
   const parsedConnection = z
-    .object({ id: z.string().uuid(), status: z.string() })
+    .object({
+      id: z.string().uuid(),
+      status: z.string(),
+      needs_reauthorization: z.boolean().nullable().optional(),
+    })
     .safeParse(connection);
-  if (error || !parsedConnection.success || parsedConnection.data.status !== "CONNECTED")
-    return null;
+  if (error || !parsedConnection.success || !isTokenUsable(parsedConnection.data)) return null;
   const credential = await admin
     .from("integration_credentials")
     .select("ciphertext,initialization_vector,auth_tag")
