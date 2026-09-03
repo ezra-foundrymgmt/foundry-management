@@ -7,6 +7,7 @@ import {
   type ProvisionedResource,
 } from "@creatoros/integrations";
 import {
+  MemoryActivationRecordPort,
   MemoryOnboardingRepository,
   OFFBOARDING_STEPS,
   OnboardingService,
@@ -147,6 +148,87 @@ describe("CREATOR_ACTIVATION_V1", () => {
     run = await service.advance(run, { ...madison, baselineReady: true });
     expect(run.status).toBe("SUCCEEDED");
     expect(slack.attempts).toBe(2);
+  });
+
+  it("actually performs the CreatorOS bookkeeping steps rather than marking them done", async () => {
+    // Regression: 21 of the 26 steps returned null and were marked SUCCEEDED
+    // without touching anything, so a completed activation did not imply a brand
+    // profile, a P&L period, internal tasks or a report schedule existed.
+    const records = new MemoryActivationRecordPort();
+    const service = new OnboardingService(new MemoryOnboardingRepository(), {
+      slack: new MockSlackProvider(),
+      notion: new MockNotionProvider(),
+      files: new MockFileStorageProvider(),
+      records,
+    });
+    const run = await service.start({ ...madison, baselineReady: true });
+    expect(run.status).toBe("SUCCEEDED");
+
+    expect(records.calls).toEqual([
+      "validateCreator",
+      "recordActivationStarted",
+      "assignTeam",
+      "initializeBrandProfile",
+      "initializeHealth",
+      "initializePnl",
+      "initializeContentInventory",
+      "createCompetitorResearch",
+      "createContentTestBoard",
+      "createInternalTasks",
+      "requestSocialIntegrations",
+      "requestRevenueIntegration",
+      "createBaselineRequest",
+      "scheduleDailyReport",
+      "scheduleWeeklyReview",
+      "generateWelcomePackage",
+      "markProvisioningComplete",
+      "completeActivation",
+    ]);
+  });
+
+  it("posts the welcome message into the channel it actually provisioned", async () => {
+    const posts: Array<{ channel: string; message: string }> = [];
+    class RecordingSlack extends MockSlackProvider {
+      override postMessage(...args: unknown[]) {
+        posts.push({ channel: String(args[0]), message: String(args[1]) });
+        return Promise.resolve();
+      }
+    }
+    const slack = new RecordingSlack();
+    const service = new OnboardingService(new MemoryOnboardingRepository(), {
+      slack,
+      notion: new MockNotionProvider(),
+      files: new MockFileStorageProvider(),
+    });
+    const run = await service.start({ ...madison, baselineReady: true });
+    const creatorChannel = run.steps.find(
+      (step) => step.name === "PROVISION_SLACK_CREATOR",
+    )?.externalId;
+    expect(posts).toHaveLength(1);
+    // Read from the persisted run, so it cannot post into a channel that was
+    // never provisioned or into the internal channel by mistake.
+    expect(posts[0]?.channel).toBe(creatorChannel);
+    expect(posts[0]?.message).toContain("Madison Carter");
+  });
+
+  it("does not repeat completed bookkeeping when a run is resumed", async () => {
+    const records = new MemoryActivationRecordPort();
+    const service = new OnboardingService(new MemoryOnboardingRepository(), {
+      slack: new MockSlackProvider(),
+      notion: new MockNotionProvider(),
+      files: new MockFileStorageProvider(),
+      records,
+    });
+    const waiting = await service.start(madison);
+    const callsBefore = [...records.calls];
+    expect(callsBefore).toContain("initializeBrandProfile");
+    expect(callsBefore).not.toContain("completeActivation");
+
+    const completed = await service.resume(waiting, { ...madison, baselineReady: true });
+    expect(completed.status).toBe("SUCCEEDED");
+    // The resume adds only the remaining step; nothing already done runs twice.
+    expect(records.calls.filter((call) => call === "initializeBrandProfile")).toHaveLength(1);
+    expect(records.calls).toContain("completeActivation");
   });
 
   it("blocks before partial provisioning when prerequisites are missing", async () => {

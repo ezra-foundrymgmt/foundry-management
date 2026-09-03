@@ -55,20 +55,32 @@ Signature verification, event dedupe, the tool registry and the authorization
 gate are MACHINE VERIFIED by 37 tests. The end-to-end path — a real `@Foundry`
 mention producing a real reply — has never run.
 
-### 21 of the 26 activation steps do nothing — PARTIAL
+### Activation steps now do real work — MACHINE VERIFIED
 
-`ACTIVATION_STEPS` lists 26 names and the orchestration around them is real:
-per-step checkpointing, persistence, idempotency, attempt counters, resume.
-But only five steps perform work (the two Slack channels, two Notion pages, and
-the file-structure placeholder). The other 21 — `ASSIGN_TEAM`,
-`INITIALIZE_BRAND_PROFILE`, `INITIALIZE_PNL`, `CREATE_INTERNAL_TASKS`,
-`SCHEDULE_DAILY_REPORT` and the rest — return `null` and are marked SUCCEEDED
-without touching anything.
+Previously 21 of the 26 steps returned `null` and were marked SUCCEEDED without
+touching anything, so a completed activation did not imply a brand profile, a
+P&L period, internal tasks or a report schedule existed.
 
-A completed activation therefore does **not** mean a brand profile, P&L period,
-internal tasks, or report schedules exist. It means Slack and Notion were
-provisioned and the rest were marked done. This is the single largest gap
-between what the workflow claims and what it does.
+All 26 now act. 5 provision external resources (Slack, Notion, files), 18 write
+CreatorOS records through `ActivationRecordPort`, 1 posts the welcome message
+into the channel activation actually provisioned, and 2 —`LOCK_IDEMPOTENCY` and
+`AWAIT_BASELINE_READINESS` — are legitimately control-flow only: the first is
+satisfied by the database's one-active-run index, the second is the baseline
+gate itself.
+
+Every record method upserts against a natural key, so a resume or a retry
+updates its own earlier row rather than creating a second one. Three tests cover
+this: the exact ordered call sequence, the welcome message landing in the
+provisioned channel, and a resume not repeating completed bookkeeping.
+
+**Still unproven against a real database.** The port is exercised through an
+in-memory recorder; `SupabaseActivationRecordPort` has never run against
+Postgres, so the `onConflict` targets are correct by inspection only.
+
+Two deliberate choices worth knowing: `initializeHealth` writes `band: UNKNOWN`
+with a zero score rather than inventing a health measurement, and
+`requestRevenueIntegration` creates the row as `NOT_CONFIGURED` — it is a
+request for a human to connect an account, never a claim that one is connected.
 
 ### Most pages still render fictional seed data — PARTIAL
 
@@ -106,16 +118,16 @@ A 12-agent adversarial review executed the code against fake providers. The
 critical and high findings were fixed and are covered by tests. These were
 confirmed and deliberately left, with the reasoning:
 
-| Finding | Why it is still open |
-| --- | --- |
-| The agent permission gate is not backed by RLS | A role denied a tool can still read the same tables directly with its own Supabase JWT, because browser roles hold `select` on business tables. The gate stops the *agent* from retrieving it, not the database from serving it. Closing this means per-table role policies, which is a schema-wide change. |
-| Prompt injection through database content is requested in the prompt, not enforced | The system prompt tells the model that tool results are data, not instructions. Nothing in code enforces it. A creator who writes instructions into a field the agent reads could influence its output. It cannot escalate permissions — the gate is outside the model — but it can shape an answer. |
-| The creator-facing surface is not bound to a *specific* creator | A creator channel is correctly identified as creator-facing, but the tool gate does not additionally check that the creator being asked about is the creator whose channel it is. An operator in creator A's channel can ask about creator B and get an answer. |
-| `INNGEST_DEV` disables signature verification on `/api/inngest` | It is outside the environment contract, so a deploy that sets it turns off verification on a proxy-exempt route with nothing to catch it. |
-| `/api/health` is unauthenticated and discloses environment and which secrets are configured | Useful for uptime checks, but it tells an anonymous caller more than it needs to. |
-| No rate limit or concurrency cap on the agent | An authorised Slack user can trigger unbounded model spend. Activation now has a concurrency cap; the agent does not. |
-| Prerequisite and compliance blockers are evaluated only at run creation | Unlike the baseline gate, they are not re-checked on resume. A creator whose contract lapses mid-activation still completes. |
-| Raw Postgres error text reaches the model context | A database error string is passed back as a tool result and can be relayed into Slack. |
+| Finding                                                                                     | Why it is still open                                                                                                                                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The agent permission gate is not backed by RLS                                              | A role denied a tool can still read the same tables directly with its own Supabase JWT, because browser roles hold `select` on business tables. The gate stops the _agent_ from retrieving it, not the database from serving it. Closing this means per-table role policies, which is a schema-wide change. |
+| Prompt injection through database content is requested in the prompt, not enforced          | The system prompt tells the model that tool results are data, not instructions. Nothing in code enforces it. A creator who writes instructions into a field the agent reads could influence its output. It cannot escalate permissions — the gate is outside the model — but it can shape an answer.        |
+| The creator-facing surface is not bound to a _specific_ creator                             | A creator channel is correctly identified as creator-facing, but the tool gate does not additionally check that the creator being asked about is the creator whose channel it is. An operator in creator A's channel can ask about creator B and get an answer.                                             |
+| `INNGEST_DEV` disables signature verification on `/api/inngest`                             | It is outside the environment contract, so a deploy that sets it turns off verification on a proxy-exempt route with nothing to catch it.                                                                                                                                                                   |
+| `/api/health` is unauthenticated and discloses environment and which secrets are configured | Useful for uptime checks, but it tells an anonymous caller more than it needs to.                                                                                                                                                                                                                           |
+| No rate limit or concurrency cap on the agent                                               | An authorised Slack user can trigger unbounded model spend. Activation now has a concurrency cap; the agent does not.                                                                                                                                                                                       |
+| Prerequisite and compliance blockers are evaluated only at run creation                     | Unlike the baseline gate, they are not re-checked on resume. A creator whose contract lapses mid-activation still completes.                                                                                                                                                                                |
+| Raw Postgres error text reaches the model context                                           | A database error string is passed back as a tool result and can be relayed into Slack.                                                                                                                                                                                                                      |
 
 ## Smaller, specific gaps
 

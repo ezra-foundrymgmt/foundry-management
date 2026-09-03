@@ -152,13 +152,117 @@ export class MemoryOnboardingRepository implements OnboardingRepository {
   }
 }
 
+/**
+ * The CreatorOS records an activation is responsible for creating.
+ *
+ * Sixteen of the twenty-six activation steps are internal bookkeeping, not
+ * external provisioning. They previously returned null and were marked
+ * SUCCEEDED without touching anything, so a "completed" activation did not
+ * imply a brand profile, a P&L period, internal tasks or a report schedule
+ * existed. This port is how those steps do real work while the orchestration
+ * itself stays free of database access.
+ *
+ * Every method MUST be idempotent: activation is resumable and each step can be
+ * retried, so a second call for the same creator must not create a second row.
+ */
+export interface ActivationRecordPort {
+  validateCreator(creator: OnboardingCreator): Promise<void>;
+  recordActivationStarted(creator: OnboardingCreator): Promise<void>;
+  assignTeam(creator: OnboardingCreator): Promise<void>;
+  initializeBrandProfile(creator: OnboardingCreator): Promise<void>;
+  initializeHealth(creator: OnboardingCreator): Promise<void>;
+  initializePnl(creator: OnboardingCreator): Promise<void>;
+  initializeContentInventory(creator: OnboardingCreator): Promise<void>;
+  createCompetitorResearch(creator: OnboardingCreator): Promise<void>;
+  createContentTestBoard(creator: OnboardingCreator): Promise<void>;
+  createInternalTasks(creator: OnboardingCreator): Promise<void>;
+  requestSocialIntegrations(creator: OnboardingCreator): Promise<void>;
+  requestRevenueIntegration(creator: OnboardingCreator): Promise<void>;
+  createBaselineRequest(creator: OnboardingCreator): Promise<void>;
+  scheduleDailyReport(creator: OnboardingCreator): Promise<void>;
+  scheduleWeeklyReview(creator: OnboardingCreator): Promise<void>;
+  generateWelcomePackage(creator: OnboardingCreator): Promise<void>;
+  markProvisioningComplete(creator: OnboardingCreator): Promise<void>;
+  completeActivation(creator: OnboardingCreator): Promise<void>;
+}
+
+/** Records every call so tests can assert a step actually did its work. */
+export class MemoryActivationRecordPort implements ActivationRecordPort {
+  readonly calls: string[] = [];
+  #record(name: string) {
+    this.calls.push(name);
+    return Promise.resolve();
+  }
+  validateCreator() {
+    return this.#record("validateCreator");
+  }
+  recordActivationStarted() {
+    return this.#record("recordActivationStarted");
+  }
+  assignTeam() {
+    return this.#record("assignTeam");
+  }
+  initializeBrandProfile() {
+    return this.#record("initializeBrandProfile");
+  }
+  initializeHealth() {
+    return this.#record("initializeHealth");
+  }
+  initializePnl() {
+    return this.#record("initializePnl");
+  }
+  initializeContentInventory() {
+    return this.#record("initializeContentInventory");
+  }
+  createCompetitorResearch() {
+    return this.#record("createCompetitorResearch");
+  }
+  createContentTestBoard() {
+    return this.#record("createContentTestBoard");
+  }
+  createInternalTasks() {
+    return this.#record("createInternalTasks");
+  }
+  requestSocialIntegrations() {
+    return this.#record("requestSocialIntegrations");
+  }
+  requestRevenueIntegration() {
+    return this.#record("requestRevenueIntegration");
+  }
+  createBaselineRequest() {
+    return this.#record("createBaselineRequest");
+  }
+  scheduleDailyReport() {
+    return this.#record("scheduleDailyReport");
+  }
+  scheduleWeeklyReview() {
+    return this.#record("scheduleWeeklyReview");
+  }
+  generateWelcomePackage() {
+    return this.#record("generateWelcomePackage");
+  }
+  markProvisioningComplete() {
+    return this.#record("markProvisioningComplete");
+  }
+  completeActivation() {
+    return this.#record("completeActivation");
+  }
+}
+
 export interface OnboardingProviders {
   slack: SlackProvider;
   notion: NotionProvider;
   files: FileStorageProvider;
+  /** Defaults to an in-memory recorder so existing callers and tests still work. */
+  records?: ActivationRecordPort;
 }
 
 export class OnboardingService {
+  get #records(): ActivationRecordPort {
+    this.providers.records ??= new MemoryActivationRecordPort();
+    return this.providers.records;
+  }
+
   constructor(
     private readonly repository: OnboardingRepository,
     private readonly providers: OnboardingProviders,
@@ -262,7 +366,7 @@ export class OnboardingService {
     step.startedAt = new Date().toISOString();
     step.attempts += 1;
     try {
-      const resource = await this.#executeStep(step.name, creator);
+      const resource = await this.#executeStep(step.name, creator, run);
       step.status = "SUCCEEDED";
       step.completedAt = new Date().toISOString();
       step.error = null;
@@ -290,6 +394,7 @@ export class OnboardingService {
   async #executeStep(
     name: ActivationStepName,
     creator: OnboardingCreator,
+    run: WorkflowRun,
   ): Promise<ProvisionedResource | null> {
     const prefix = `creator:${creator.id}`;
     if (name === "PROVISION_SLACK_CREATOR") {
@@ -349,6 +454,53 @@ export class OnboardingService {
         }),
       );
     }
+
+    if (name === "POST_WELCOME_NOTIFICATION") {
+      // Posts into the channel PROVISION_SLACK_CREATOR actually created, read
+      // from the persisted run rather than reconstructed, so this cannot post
+      // into a channel that was never provisioned.
+      const channel = run.steps.find((step) => step.name === "PROVISION_SLACK_CREATOR")?.externalId;
+      if (!channel) throw new Error("WELCOME_NOTIFICATION_WITHOUT_CHANNEL");
+      await this.providers.slack.postMessage(
+        channel,
+        `Welcome to Foundry, ${creator.stageName}. This channel is where your Foundry team coordinates with you.`,
+      );
+      return null;
+    }
+
+    // Everything below records CreatorOS state. Each is idempotent, so a retry
+    // or a resume repeats the call without creating a second row.
+    const records = this.#records;
+    const recorders: Partial<Record<ActivationStepName, () => Promise<void>>> = {
+      VALIDATE_CREATOR: () => records.validateCreator(creator),
+      CREATE_ACTIVATION: () => records.recordActivationStarted(creator),
+      ASSIGN_TEAM: () => records.assignTeam(creator),
+      INITIALIZE_BRAND_PROFILE: () => records.initializeBrandProfile(creator),
+      INITIALIZE_HEALTH: () => records.initializeHealth(creator),
+      INITIALIZE_PNL: () => records.initializePnl(creator),
+      INITIALIZE_CONTENT_INVENTORY: () => records.initializeContentInventory(creator),
+      CREATE_COMPETITOR_RESEARCH: () => records.createCompetitorResearch(creator),
+      CREATE_CONTENT_TEST_BOARD: () => records.createContentTestBoard(creator),
+      CREATE_INTERNAL_TASKS: () => records.createInternalTasks(creator),
+      REQUEST_SOCIAL_INTEGRATIONS: () => records.requestSocialIntegrations(creator),
+      REQUEST_REVENUE_INTEGRATION: () => records.requestRevenueIntegration(creator),
+      CREATE_BASELINE_REQUEST: () => records.createBaselineRequest(creator),
+      SCHEDULE_DAILY_REPORT: () => records.scheduleDailyReport(creator),
+      SCHEDULE_WEEKLY_REVIEW: () => records.scheduleWeeklyReview(creator),
+      GENERATE_WELCOME_PACKAGE: () => records.generateWelcomePackage(creator),
+      MARK_PROVISIONING_COMPLETE: () => records.markProvisioningComplete(creator),
+      COMPLETE_ACTIVATION: () => records.completeActivation(creator),
+    };
+    const recorder = recorders[name];
+    if (recorder) {
+      await recorder();
+      return null;
+    }
+
+    // LOCK_IDEMPOTENCY and AWAIT_BASELINE_READINESS are genuinely control-flow
+    // only: the first is satisfied by the database's one-active-run index, the
+    // second is the gate handled in advance(). They are the only two steps that
+    // legitimately do no work.
     return null;
   }
 }

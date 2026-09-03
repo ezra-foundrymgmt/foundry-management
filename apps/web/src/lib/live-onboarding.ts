@@ -15,6 +15,7 @@ import {
 import { z } from "zod";
 import { getIntegrationToken, SupabaseProviderResourceStore } from "@/lib/integration-registry";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { SupabaseActivationRecordPort } from "@/lib/activation-records";
 
 const creatorRowSchema = z.object({
   id: z.string().uuid(),
@@ -342,6 +343,7 @@ export async function createLiveOnboardingService(
       new SupabaseProviderResourceStore(organizationId, creatorId, "NOTION", "page"),
     ),
     files: new ManualFileStorageProvider(),
+    records: new SupabaseActivationRecordPort(organizationId, actorUserId),
   });
   return { repository, service };
 }
