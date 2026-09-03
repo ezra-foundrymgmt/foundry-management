@@ -17,6 +17,33 @@ create index if not exists creator_report_schedules_due_idx
   where active;
 
 /**
+ * A timezone name Postgres will accept, falling back to UTC.
+ *
+ * `at time zone '<garbage>'` raises. creator_report_schedules.timezone holds
+ * whatever string the creator record carried, so without this one unrecognised
+ * value would abort the claim for every schedule in the batch — a single bad
+ * creator record silently stopping all reporting.
+ */
+-- STABLE, not IMMUTABLE: pg_timezone_names changes when the server's tzdata is
+-- updated, so the result is only guaranteed constant within one statement.
+create or replace function public.safe_timezone(p_timezone text)
+  returns text
+  language sql
+  stable
+  set search_path = ''
+as $$
+  select case
+    when p_timezone is not null
+      and exists (select 1 from pg_catalog.pg_timezone_names z where z.name = p_timezone)
+    then p_timezone
+    else 'UTC'
+  end;
+$$;
+
+revoke all on function public.safe_timezone(text) from public, anon, authenticated;
+grant execute on function public.safe_timezone(text) to service_role;
+
+/**
  * Claims schedules that are due, advancing next_due_at in the same statement.
  *
  * Doing the claim and the advance atomically is what makes two overlapping
@@ -34,6 +61,23 @@ create index if not exists creator_report_schedules_due_idx
  * floor((now - due) / interval) + 1 keeps the time of day fixed and skips
  * whatever occurrences were missed while the scheduler was down — one catch-up
  * report, not a burst of backdated ones.
+ *
+ * The arithmetic is done on the local wall clock in the schedule's own timezone,
+ * then converted back. Adding 86400 seconds is not the same as adding a day: at
+ * a daylight-saving transition it shifts the creator's local time by an hour,
+ * permanently, until the next transition undoes it. Converting to local time
+ * first makes "+1 day" mean the same clock time tomorrow, which is what a
+ * creator expects of their daily report.
+ *
+ * An unrecognised timezone falls back to UTC rather than raising. The column
+ * holds whatever string the creator record carried, and one bad value must not
+ * abort the claim for every other schedule in the batch.
+ *
+ * The "how many occurrences were missed" division is still in seconds, so on the
+ * 23- or 25-hour day of a transition it can land one occurrence short and leave
+ * next_due_at slightly in the past. The schedule is then claimed again on the
+ * next hourly tick and settles. That costs one redundant run a year and produces
+ * no duplicate report, because reports are upserted on (creator_id, report_date).
  *
  * last_run_at is stamped at claim time, not completion: the claim and the
  * advance have to be one statement, and the outcome is recorded separately by
@@ -64,15 +108,19 @@ begin
     for update skip locked
   )
   update public.creator_report_schedules s
-     set next_due_at = s.next_due_at + make_interval(
-           secs => (
-             case when s.cadence = 'DAILY' then 86400 else 604800 end
-           ) * (
-             floor(
-               extract(epoch from (p_now - s.next_due_at))
-               / (case when s.cadence = 'DAILY' then 86400 else 604800 end)
-             ) + 1
-           )
+     set next_due_at = (
+           (
+             (s.next_due_at at time zone public.safe_timezone(s.timezone))
+             + make_interval(
+                 days => (case when s.cadence = 'DAILY' then 1 else 7 end)
+                   * (
+                     floor(
+                       extract(epoch from (p_now - s.next_due_at))
+                       / (case when s.cadence = 'DAILY' then 86400 else 604800 end)
+                     )::integer + 1
+                   )
+               )
+           ) at time zone public.safe_timezone(s.timezone)
          ),
          last_run_at = p_now,
          updated_at = p_now
