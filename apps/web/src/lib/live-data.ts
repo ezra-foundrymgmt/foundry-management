@@ -127,6 +127,38 @@ async function resolveUserLabels(
   );
 }
 
+export interface LiveTeamMember {
+  id: string;
+  name: string;
+}
+
+/**
+ * The people a creator can be assigned to.
+ *
+ * Reads the org's active memberships, which is the only place CreatorOS models
+ * who works here. Needed because creator assignment had no write surface and
+ * therefore no roster to pick from -- an owner could only be set by editing
+ * the row in the database directly.
+ */
+export async function getLiveTeamMembers(): Promise<LiveTeamMember[]> {
+  const { session, client } = await context();
+  const { data, error } = await client
+    .from("organization_memberships")
+    .select("user_id")
+    .eq("organization_id", session.organizationId)
+    .eq("active", true);
+  if (error) throw new Error(`TEAM_READ_FAILED: ${error.message}`);
+  const rows = z.array(z.object({ user_id: z.string().uuid() })).parse(data ?? []);
+  if (rows.length === 0) return [];
+  const labels = await resolveUserLabels(
+    client,
+    rows.map((row) => row.user_id),
+  );
+  return rows
+    .map((row) => ({ id: row.user_id, name: labels.get(row.user_id) ?? "Unknown user" }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
 export async function getLiveCreators(): Promise<LiveCreatorRow[]> {
   const { session, client } = await context();
   const { data, error } = await client
@@ -813,6 +845,13 @@ export interface LiveCreatorDetail {
     startDate: string | null;
     timezone: string | null;
     primaryPlatform: string | null;
+    /**
+     * Exposed per seat so the activation-gates controls can show who currently
+     * holds each one. The collapsed `owner` label on LiveCreatorRow picks a
+     * single winner and cannot round-trip into two independent controls.
+     */
+    assignedCreatorSuccessUserId: string | null;
+    assignedGrowthUserId: string | null;
     /** Null means nobody has triaged this creator yet, not that it is low. */
     priority: string | null;
     /** The optimistic-concurrency token the priority control sends back. */
@@ -1025,6 +1064,8 @@ export async function getLiveCreatorDetail(creatorId: string): Promise<LiveCreat
       startDate: row.start_date,
       timezone: row.timezone,
       primaryPlatform: row.primary_platform,
+      assignedCreatorSuccessUserId: row.assigned_creator_success_user_id,
+      assignedGrowthUserId: row.assigned_growth_user_id,
       priority: row.priority,
       updatedAt: row.updated_at,
     },

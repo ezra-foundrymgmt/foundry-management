@@ -8,6 +8,7 @@ import { ArrowLeft } from "lucide-react";
 import { AccessDenied } from "@/components/access-denied";
 import { CreatorPriorityControl } from "@/components/creator-priority-control";
 import { OnboardingButton } from "@/components/onboarding-button";
+import { ActivationGates } from "@/components/activation-gates";
 import { ReadinessPanel, type ReadinessState } from "@/components/readiness-panel";
 import { StatusBadge } from "@/components/status-badge";
 import {
@@ -19,7 +20,7 @@ import {
 } from "@/lib/format";
 import { evaluateActivationReadiness } from "@/lib/activation-readiness";
 import { isMockMode } from "@/lib/environment";
-import { getLiveCreatorDetail, type LiveCreatorDetail } from "@/lib/live-data";
+import { getLiveCreatorDetail, getLiveTeamMembers, type LiveCreatorDetail } from "@/lib/live-data";
 import { captureException } from "@/lib/observability";
 import { authorizePage } from "@/lib/page-access";
 
@@ -47,6 +48,8 @@ function demoDetail(creatorId: string): LiveCreatorDetail | null {
       startDate: "2026-09-01",
       timezone: "America/Los_Angeles",
       primaryPlatform: "Instagram",
+      assignedCreatorSuccessUserId: null,
+      assignedGrowthUserId: null,
       priority: null,
       updatedAt: "2026-09-01T00:00:00.000Z",
     },
@@ -85,7 +88,7 @@ function demoDetail(creatorId: string): LiveCreatorDetail | null {
       {
         boundaryType: "CONTENT",
         description: "No face-visible gym content",
-        severity: "PROHIBITED",
+        severity: "HARD",
       },
     ],
     baselineFrozen: false,
@@ -109,6 +112,10 @@ export default async function CreatorPage({ params }: { params: Promise<{ creato
   // Evaluated against the records themselves, so this panel disagrees with the
   // creator status whenever the status is wrong. A failed evaluation says so
   // rather than defaulting to a reassuring answer.
+  // The roster the assignment controls pick from. Empty in mock mode, where
+  // there is no membership table behind it.
+  const team = mock ? [] : await getLiveTeamMembers();
+
   const readiness: ReadinessState = mock
     ? {
         evaluated: false,
@@ -206,6 +213,20 @@ export default async function CreatorPage({ params }: { params: Promise<{ creato
       <div className="grid dashboard-grid">
         <div className="grid">
           <ReadinessPanel state={readiness} />
+
+          {mock ? null : (
+            <ActivationGates
+              creatorId={creator.id}
+              updatedAt={creator.updatedAt}
+              jurisdictionReviewStatus={creator.jurisdictionStatus}
+              adultConfirmationStatus={creator.adultConfirmationStatus}
+              assignedCreatorSuccessUserId={creator.assignedCreatorSuccessUserId}
+              assignedGrowthUserId={creator.assignedGrowthUserId}
+              team={team}
+              boundaryCount={boundaries.length}
+              baselineFrozen={baselineFrozen}
+            />
+          )}
 
           <section className="card card-pad">
             <h2>Latest daily report</h2>

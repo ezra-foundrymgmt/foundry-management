@@ -1,10 +1,52 @@
 import "server-only";
 import { z } from "zod";
-import { WORK_PRIORITIES } from "@creatoros/domain";
+import {
+  ADULT_CONFIRMATION_STATUSES,
+  JURISDICTION_REVIEW_STATUSES,
+  WORK_PRIORITIES,
+} from "@creatoros/domain";
 import type { AppSession } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { appendAudit } from "@/lib/audit";
 import { logEvent } from "@/lib/observability";
+
+/**
+ * Records the two human-authority decisions activation blocks on.
+ *
+ * Both fields are optional so a reviewer can record one decision without
+ * asserting the other, but the route refuses a body carrying neither — an
+ * empty patch would burn the concurrency token for no change.
+ */
+export const creatorComplianceSchema = z
+  .object({
+    jurisdictionReviewStatus: z.enum(JURISDICTION_REVIEW_STATUSES).optional(),
+    adultConfirmationStatus: z.enum(ADULT_CONFIRMATION_STATUSES).optional(),
+    updatedAt: z.string().datetime({ offset: true }),
+  })
+  .refine(
+    (value) =>
+      value.jurisdictionReviewStatus !== undefined || value.adultConfirmationStatus !== undefined,
+    { message: "NO_COMPLIANCE_FIELDS_TO_UPDATE" },
+  );
+
+/**
+ * Assigns the Foundry owners of a creator.
+ *
+ * Nullable so an owner can be cleared, and both optional so one seat can be
+ * filled without touching the other. Readiness is satisfied by either seat
+ * being filled (activation-readiness.ts's `assigned-team` check), which is why
+ * this is one write rather than two independent ones.
+ */
+export const creatorAssignmentSchema = z
+  .object({
+    creatorSuccessUserId: z.string().uuid().nullable().optional(),
+    growthUserId: z.string().uuid().nullable().optional(),
+    updatedAt: z.string().datetime({ offset: true }),
+  })
+  .refine(
+    (value) => value.creatorSuccessUserId !== undefined || value.growthUserId !== undefined,
+    { message: "NO_ASSIGNMENT_FIELDS_TO_UPDATE" },
+  );
 
 export const creatorPrioritySchema = z.object({
   // Nullable so a priority can be cleared back to "not triaged" rather than
@@ -115,4 +157,113 @@ export async function updateCreatorPriority(
     });
   }
   return { id: creatorId, priority: input.priority, updatedAt };
+}
+
+/**
+ * Applies a patch to a creator row under optimistic concurrency, then audits it.
+ *
+ * Shared by the compliance and assignment writers because the dance is
+ * identical and easy to get subtly wrong in only one of them: read current,
+ * refuse a stale token, re-assert the token in the UPDATE's WHERE clause so a
+ * writer that slipped in between the read and the write loses, and audit
+ * best-effort afterwards so a failed audit cannot turn a committed change into
+ * a 500 the caller reads as "nothing happened".
+ */
+async function patchCreator(
+  session: AppSession,
+  creatorId: string,
+  input: { updatedAt: string },
+  patch: Record<string, string | null>,
+  audit: { action: string; before: Record<string, unknown> },
+): Promise<{ id: string; updatedAt: string }> {
+  const client = admin();
+  const current = await client
+    .from("creators")
+    .select("id,updated_at,stage_name")
+    .eq("organization_id", session.organizationId)
+    .eq("id", creatorId)
+    .maybeSingle();
+  if (current.error) throw databaseFailure("read-current", current.error);
+  if (!current.data) throw new CreatorError("CREATOR_NOT_FOUND", 404);
+  const before = current.data as { updated_at: string; stage_name: string };
+  if (before.updated_at !== input.updatedAt)
+    throw new CreatorError("CREATOR_CHANGED_REFRESH_REQUIRED", 409);
+
+  const updatedAt = new Date().toISOString();
+  const { data, error } = await client
+    .from("creators")
+    .update({ ...patch, updated_at: updatedAt, updated_by: session.userId })
+    .eq("organization_id", session.organizationId)
+    .eq("id", creatorId)
+    .eq("updated_at", input.updatedAt)
+    .select("id")
+    .maybeSingle();
+  if (error) throw databaseFailure("write", error);
+  if (!data) throw new CreatorError("CREATOR_CHANGED_REFRESH_REQUIRED", 409);
+
+  try {
+    await appendAudit(session, audit.action, "creator", creatorId, {
+      stageName: before.stage_name,
+      ...audit.before,
+      after: patch,
+    });
+  } catch (auditError) {
+    logEvent("error", "creator.audit_failed", {
+      action: audit.action,
+      creatorId,
+      userId: session.userId,
+      message: auditError instanceof Error ? auditError.message : String(auditError),
+    });
+  }
+  return { id: creatorId, updatedAt };
+}
+
+/**
+ * Records a jurisdiction review and/or adult confirmation decision.
+ *
+ * These are two of the four BLOCKED activation gates that previously had no
+ * write path at any layer: the conversion RPC hardcodes PENDING/NOT_STARTED
+ * and nothing could ever change them, so no converted creator could reach
+ * ACTIVE. Requires `creator.update` at the route.
+ */
+export async function updateCreatorCompliance(
+  session: AppSession,
+  creatorId: string,
+  input: z.infer<typeof creatorComplianceSchema>,
+) {
+  const patch: Record<string, string | null> = {};
+  if (input.jurisdictionReviewStatus !== undefined)
+    patch["jurisdiction_review_status"] = input.jurisdictionReviewStatus;
+  if (input.adultConfirmationStatus !== undefined)
+    patch["adult_confirmation_status"] = input.adultConfirmationStatus;
+
+  const result = await patchCreator(session, creatorId, input, patch, {
+    action: "creator.compliance.recorded",
+    before: {},
+  });
+  return { ...result, ...input, updatedAt: result.updatedAt };
+}
+
+/**
+ * Assigns or clears the Foundry owners of a creator.
+ *
+ * The third BLOCKED gate with no previous writer. `assigned-team` is satisfied
+ * by either seat, and activation re-checks it at execution time, so leaving
+ * both empty is what kept every converted creator un-activatable.
+ */
+export async function updateCreatorAssignment(
+  session: AppSession,
+  creatorId: string,
+  input: z.infer<typeof creatorAssignmentSchema>,
+) {
+  const patch: Record<string, string | null> = {};
+  if (input.creatorSuccessUserId !== undefined)
+    patch["assigned_creator_success_user_id"] = input.creatorSuccessUserId;
+  if (input.growthUserId !== undefined) patch["assigned_growth_user_id"] = input.growthUserId;
+
+  const result = await patchCreator(session, creatorId, input, patch, {
+    action: "creator.assignment.changed",
+    before: {},
+  });
+  return { ...result, ...input, updatedAt: result.updatedAt };
 }

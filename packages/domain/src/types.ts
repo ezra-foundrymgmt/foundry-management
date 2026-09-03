@@ -16,7 +16,25 @@ export const HEALTH_BANDS = ["GREEN", "WATCH", "AT_RISK", "CRITICAL", "UNKNOWN"]
 export type HealthBand = (typeof HEALTH_BANDS)[number];
 
 export type TrendDirection = "up" | "down" | "flat";
-export type DataConfidence = "MEASURED" | "PARTIALLY_MEASURED" | "ESTIMATED" | "UNKNOWN";
+
+/**
+ * Where a measured figure came from, mirroring the `public.data_confidence`
+ * Postgres enum. Every metric written into CreatorOS carries one: a figure an
+ * operator typed from a platform dashboard is not the same claim as one a
+ * provider reported, and that difference has to survive into the report that
+ * cites it.
+ *
+ * A const list rather than a bare union so write surfaces can validate against
+ * it with `z.enum` — the same reason WORK_PRIORITIES and HEALTH_BANDS are
+ * lists rather than unions.
+ */
+export const DATA_CONFIDENCES = [
+  "MEASURED",
+  "PARTIALLY_MEASURED",
+  "ESTIMATED",
+  "UNKNOWN",
+] as const;
+export type DataConfidence = (typeof DATA_CONFIDENCES)[number];
 
 export interface CreatorSummary {
   id: string;
@@ -78,6 +96,41 @@ export const WORK_DEPARTMENTS = [
   "Compliance",
 ] as const;
 export type WorkDepartment = (typeof WORK_DEPARTMENTS)[number];
+
+/**
+ * The two human-authority decisions activation blocks on.
+ *
+ * `convert_prospect_to_creator` inserts a creator at PENDING/NOT_STARTED, and
+ * activation readiness demands APPROVED/CONFIRMED — so until these had a write
+ * surface, no converted creator could ever be activated. The accepted-value
+ * lists in activation-readiness.ts are deliberately wider than these (they also
+ * accept COMPLETE/PASSED/VERIFIED from records created before this vocabulary
+ * existed); these are what CreatorOS itself writes.
+ */
+export const JURISDICTION_REVIEW_STATUSES = ["PENDING", "APPROVED", "REJECTED"] as const;
+export type JurisdictionReviewStatus = (typeof JURISDICTION_REVIEW_STATUSES)[number];
+
+export const ADULT_CONFIRMATION_STATUSES = ["NOT_STARTED", "CONFIRMED", "REJECTED"] as const;
+export type AdultConfirmationStatus = (typeof ADULT_CONFIRMATION_STATUSES)[number];
+
+/**
+ * Creator boundaries — what a creator will and will not do.
+ *
+ * HARD is never, under any circumstance. SOFT is case-by-case and is the only
+ * severity for which `requiresCreatorApproval` is meaningful: a hard limit is
+ * not something the creator gets asked about again.
+ */
+export const BOUNDARY_SEVERITIES = ["HARD", "SOFT"] as const;
+export type BoundarySeverity = (typeof BOUNDARY_SEVERITIES)[number];
+
+export const BOUNDARY_TYPES = [
+  "CONTENT",
+  "PLATFORM",
+  "INTERACTION",
+  "SCHEDULING",
+  "COLLABORATION",
+] as const;
+export type BoundaryType = (typeof BOUNDARY_TYPES)[number];
 
 export interface Recommendation {
   id: string;
