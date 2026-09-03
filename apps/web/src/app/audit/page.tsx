@@ -1,3 +1,5 @@
+import { AccessDenied } from "@/components/access-denied";
+import { authorizePage } from "@/lib/page-access";
 import { Download, Filter } from "lucide-react";
 import { DemoStrip, PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
@@ -38,6 +40,9 @@ const demoEvents = [
   },
 ];
 export default async function AuditPage() {
+  const access = await authorizePage("audit.read");
+  if (!access.allowed)
+    return <AccessDenied title="Audit trail" permission="audit.read" reason={access.reason} />;
   const events = isMockMode() ? demoEvents : await getLiveAuditEvents();
   return (
     <main className="page">

@@ -1,3 +1,6 @@
+import { AccessDenied } from "@/components/access-denied";
+import { authorizePage } from "@/lib/page-access";
+import { formatScore } from "@/lib/format";
 import { PIPELINE_STAGES, prospects } from "@creatoros/domain";
 import { Filter, Plus, Search } from "lucide-react";
 import { ConvertProspectButton } from "@/components/convert-prospect-button";
@@ -9,6 +12,9 @@ import { getLiveProspects } from "@/lib/live-data";
 const visibleStages = ["FOLLOW_UP", "AUDIT", "DISCOVERY", "SIGNED"] as const;
 
 export default async function ProspectsPage() {
+  const access = await authorizePage("prospect.read");
+  if (!access.allowed)
+    return <AccessDenied title="Prospects" permission="prospect.read" reason={access.reason} />;
   const prospectRecords = isMockMode() ? prospects : await getLiveProspects();
   return (
     <main className="page">
@@ -78,10 +84,10 @@ export default async function ProspectsPage() {
                     >
                       <StatusBadge
                         value={prospect.fitTier}
-                        label={`${prospect.fitScore} · ${prospect.fitTier}`}
+                        label={`${formatScore(prospect.fitScore)} · ${prospect.fitTier}`}
                       />
                       <span style={{ fontSize: 10, color: "var(--ink-soft)" }}>
-                        {prospect.owner}
+                        {prospect.owner ?? "Unassigned"}
                       </span>
                     </div>
                     {prospect.pipelineStage === "SIGNED" ? (

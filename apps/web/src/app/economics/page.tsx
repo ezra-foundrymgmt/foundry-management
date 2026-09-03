@@ -1,3 +1,5 @@
+import { AccessDenied } from "@/components/access-denied";
+import { authorizePage } from "@/lib/page-access";
 import { creators } from "@creatoros/domain";
 import { DemoStrip, PageHeader } from "@/components/page-header";
 import { MetricCard } from "@/components/metric-card";
@@ -36,7 +38,10 @@ const money = new Intl.NumberFormat("en-US", {
   currency: "USD",
   maximumFractionDigits: 0,
 });
-export default function EconomicsPage() {
+export default async function EconomicsPage() {
+  const access = await authorizePage("finance.read");
+  if (!access.allowed)
+    return <AccessDenied title="Unit economics" permission="finance.read" reason={access.reason} />;
   const receipts = creators.reduce((sum, item) => sum + item.monthlyRevenue, 0);
   return (
     <main className="page">

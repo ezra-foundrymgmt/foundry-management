@@ -22,6 +22,7 @@ import {
   Workflow,
 } from "lucide-react";
 import { creators, prospects, tasks } from "@creatoros/domain";
+import { AccountMenu, type AccountIdentity } from "./account-menu";
 import { WebMcpTools } from "./webmcp-tools";
 
 const nav = [
@@ -58,7 +59,13 @@ const demoSearchable = [
   ...tasks.map((item) => ({ label: item.title, sub: `Task · ${item.department}`, href: "/tasks" })),
 ];
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+export function AppShell({
+  children,
+  identity = null,
+}: {
+  children: React.ReactNode;
+  identity?: AccountIdentity | null;
+}) {
   const pathname = usePathname();
   const router = useRouter();
   const [commandOpen, setCommandOpen] = useState(false);
@@ -166,12 +173,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <a className="icon-button" aria-label="Notifications and incidents" href="/incidents">
               <Bell size={16} />
             </a>
-            <div
-              className="avatar"
-              title={demo ? "Alex Morgan · Demo Super Admin" : "Foundry member"}
-            >
-              {demo ? "AM" : "FM"}
-            </div>
+            <AccountMenu identity={identity} />
           </div>
         </div>
         {children}

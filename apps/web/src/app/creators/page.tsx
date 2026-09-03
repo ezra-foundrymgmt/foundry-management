@@ -1,3 +1,5 @@
+import { AccessDenied } from "@/components/access-denied";
+import { authorizePage } from "@/lib/page-access";
 import Link from "next/link";
 import { creators } from "@creatoros/domain";
 import { Filter, Plus, Search } from "lucide-react";
@@ -14,6 +16,9 @@ import {
   UNKNOWN_DISPLAY,
 } from "@/lib/format";
 export default async function CreatorsPage() {
+  const access = await authorizePage("creator.read");
+  if (!access.allowed)
+    return <AccessDenied title="Creators" permission="creator.read" reason={access.reason} />;
   const creatorRecords = isMockMode() ? creators : await getLiveCreators();
   return (
     <main className="page">

@@ -200,6 +200,39 @@ a {
   color: #523a28;
   font-size: 11px;
   font-weight: 800;
+  border: 0;
+  cursor: pointer;
+}
+.account-menu {
+  position: relative;
+}
+.account-popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 40;
+  min-width: 224px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 14%);
+}
+.account-email {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.account-meta {
+  margin: 2px 0 10px;
+  font-size: 11px;
+  color: var(--ink-soft);
+  text-transform: capitalize;
+}
+.account-signout {
+  width: 100%;
+  justify-content: center;
 }
 .page {
   max-width: 1600px;
