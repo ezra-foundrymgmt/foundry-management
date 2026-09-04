@@ -5,6 +5,7 @@ import type { AppSession } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { appendAudit } from "@/lib/audit";
 import { logEvent } from "@/lib/observability";
+import { recordImportRun } from "@/lib/import-run";
 
 /**
  * The write path for measured creator revenue.
@@ -121,30 +122,25 @@ export async function importCreatorRevenue(
   if (error) throw databaseFailure("write", error);
   const written = Array.isArray(data) ? data.length : 0;
 
-  // The import ledger. Recorded after the write so a run that appears here is
-  // one that actually landed, and best-effort so bookkeeping cannot fail an
-  // import that already committed.
-  try {
-    await client.from("data_import_runs").insert({
-      organization_id: session.organizationId,
-      creator_id: creatorId,
-      provider: input.source,
-      source: input.platform,
-      status: "SUCCEEDED",
-      idempotency_key: `revenue:${creatorId}:${input.platform}:${input.source}:${startedAt}`,
-      rows_received: input.rows.length,
-      rows_inserted: written,
-      rows_updated: 0,
-      rows_rejected: input.rows.length - written,
-      started_at: startedAt,
-      completed_at: new Date().toISOString(),
-    });
-  } catch (ledgerError) {
-    logEvent("error", "metrics_import.ledger_failed", {
-      creatorId,
-      message: ledgerError instanceof Error ? ledgerError.message : String(ledgerError),
-    });
-  }
+  /**
+   * The shared ledger writer, so both ingestion paths record a run the same
+   * way. This used to be an inline insert here, and it wrote
+   * `provider: input.source` (OPERATOR_ENTRY) with `source: input.platform`
+   * (ONLYFANS) — the opposite of what those column names mean everywhere else
+   * in the schema, where `provider` is the external system. Extracting the
+   * helper without moving this call would have left `data_import_runs` holding
+   * two contradictory conventions and no way to tell which row used which.
+   */
+  await recordImportRun(client, {
+    organizationId: session.organizationId,
+    creatorId,
+    provider: input.platform,
+    source: input.source,
+    idempotencyKey: `revenue:${creatorId}:${input.platform}:${input.source}:${startedAt}`,
+    rowsReceived: input.rows.length,
+    rowsWritten: written,
+    startedAt,
+  });
 
   try {
     await appendAudit(session, "creator.revenue.imported", "creator", creatorId, {

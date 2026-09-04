@@ -3,6 +3,11 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { DATA_CONFIDENCES, SOCIAL_PLATFORMS } from "@creatoros/domain";
+import {
+  findImportProblem,
+  numberOrNull,
+  type ImportRowProblem,
+} from "@/lib/import-form";
 
 /**
  * The operator surface for both ingestion paths.
@@ -16,8 +21,10 @@ import { DATA_CONFIDENCES, SOCIAL_PLATFORMS } from "@creatoros/domain";
  * A row list rather than a paste-a-CSV box, deliberately. There is no CSV to
  * paste from: Instagram and TikTok insights are read off a screen, and a
  * delimited parser is precisely where a blank cell silently becomes a zero.
- * Here a blank field stays blank and is sent as null, which the API reads as
- * "not measured" rather than "measured zero".
+ * Here a blank field is sent as null and stored as null, so the ROW records
+ * that the metric was never read -- though the report still totals a null as
+ * nothing when it sums that column, which the panel says plainly rather than
+ * implying the distinction survives everywhere.
  */
 
 type Mode = "revenue" | "social";
@@ -37,19 +44,25 @@ const MESSAGES: Record<string, string> = {
   SOCIAL_IMPORT_DATABASE_FAILED: "The figures could not be saved. Nothing changed.",
 };
 
-/**
- * A blank field is not zero.
- *
- * `Number("")` is 0 and `parseInt("")` is NaN, so either careless conversion
- * turns "I did not read this metric" into a measurement of zero — which then
- * gets summed into a report and frozen into a baseline.
- */
-function numberOrNull(value: string): number | null {
-  const trimmed = value.trim();
-  if (trimmed === "") return null;
-  const parsed = Number(trimmed);
-  return Number.isFinite(parsed) ? parsed : null;
-}
+/** What each batch-level refusal means, in the language of the active mode. */
+const ROW_PROBLEMS: Record<ImportRowProblem, Record<Mode, string>> = {
+  NO_ROWS: {
+    social: "Add at least one post before importing.",
+    revenue: "Add at least one day before importing.",
+  },
+  ROW_WITHOUT_IDENTITY: {
+    social: "One row has metrics but no post id. Add the id, or clear the row.",
+    revenue: "One row has figures but no date. Add the date, or clear the row.",
+  },
+  MISSING_PUBLISHED_DATE: {
+    social: "Every post needs a publish date.",
+    revenue: "Every row needs a date.",
+  },
+  UNPARSEABLE_NUMBER: {
+    social: "One metric is not a number. Fix it, or clear it to record it as unmeasured.",
+    revenue: "One figure is not a number. Fix it, or clear it to record it as unmeasured.",
+  },
+};
 
 const SOCIAL_METRICS = [
   ["views", "Views"],
@@ -145,12 +158,16 @@ export function MetricsImportPanel({
     setMessage("");
     setOk("");
 
-    const filled = rows.filter((row) => row.identity.trim() !== "");
-    if (filled.length === 0) {
-      setMessage("Add at least one row before importing.");
+    // Checked before anything is converted. In particular a blank publish date
+    // made `new Date("T12:00:00Z").toISOString()` throw a RangeError that
+    // escaped the handler entirely, leaving the panel stuck on "Importing…".
+    const problem = findImportProblem(rows, mode);
+    if (problem) {
+      setMessage(ROW_PROBLEMS[problem][mode]);
       setBusy(false);
       return;
     }
+    const filled = rows.filter((row) => row.identity.trim() !== "");
 
     const endpoint =
       mode === "social"
@@ -171,9 +188,10 @@ export function MetricsImportPanel({
               hookLabel: null,
               captionSummary: null,
               durationSeconds: null,
-              // Every metric key is sent explicitly. The API requires them, so
-              // that a partial re-import cannot silently null a figure an
-              // earlier fuller import had measured.
+              // Every metric key is sent explicitly, because the API requires
+              // them: one import is one complete reading of a post, so the row
+              // it writes is always a coherent snapshot rather than a mix of
+              // this reading and whatever a previous one left behind.
               ...Object.fromEntries(
                 SOCIAL_METRICS.map(([field]) => [field, numberOrNull(row.values[field] ?? "")]),
               ),
@@ -191,27 +209,37 @@ export function MetricsImportPanel({
             })),
           };
 
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const payload = (await response.json().catch(() => ({}))) as {
-      data?: { rowsWritten: number };
-      error?: string;
-    };
-    setBusy(false);
+    /**
+     * Everything from here is wrapped, because `busy` must come back down on
+     * every path. A throw anywhere in this block used to leave the button
+     * disabled and the panel reading "Importing…" indefinitely.
+     */
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        data?: { rowsWritten: number };
+        error?: string;
+      };
 
-    if (!response.ok || !payload.data) {
-      setMessage(
-        (payload.error && MESSAGES[payload.error]) ??
-          "The figures could not be saved. Nothing changed.",
-      );
-      return;
+      if (!response.ok || !payload.data) {
+        setMessage(
+          (payload.error && MESSAGES[payload.error]) ??
+            "The figures could not be saved. Nothing changed.",
+        );
+        return;
+      }
+      setOk(`Imported ${payload.data.rowsWritten} ${mode === "social" ? "posts" : "days"}.`);
+      reset();
+      startTransition(() => router.refresh());
+    } catch {
+      setMessage("The import could not be sent. Nothing was saved.");
+    } finally {
+      setBusy(false);
     }
-    setOk(`Imported ${payload.data.rowsWritten} ${mode === "social" ? "posts" : "days"}.`);
-    reset();
-    startTransition(() => router.refresh());
   }
 
   if (!canImportRevenue && !canImportSocial) return null;
@@ -248,9 +276,11 @@ export function MetricsImportPanel({
       </div>
 
       <p className="subtitle" style={{ fontSize: 10, margin: 0, lineHeight: 1.5 }}>
-        Leave a metric blank if you did not read it. A blank is recorded as not
-        measured, which is different from a measured zero and is treated
-        differently by every report.
+        Each import <strong>replaces</strong> the whole row for that{" "}
+        {mode === "social" ? "post" : "day"}, so enter everything you read — not
+        only what changed. A blank is stored as not measured rather than as a
+        zero, and is recorded as such on the row; note that reports still total
+        it as nothing when they add the column up.
       </p>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>

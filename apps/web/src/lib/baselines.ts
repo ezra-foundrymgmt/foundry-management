@@ -110,7 +110,8 @@ export async function freezeBaseline(
       .eq("organization_id", session.organizationId)
       .eq("creator_id", creatorId)
       .gte("date", input.periodStart)
-      .lte("date", input.periodEnd),
+      .lte("date", input.periodEnd)
+      .order("imported_at", { ascending: true }),
     client
       .from("social_posts")
       .select("reach,profile_visits,outbound_clicks")

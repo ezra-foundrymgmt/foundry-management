@@ -261,7 +261,8 @@ export async function produceDailyCreatorReport(input: {
       .eq("organization_id", input.organizationId)
       .eq("creator_id", input.creatorId)
       .gte("date", since)
-      .lte("date", until),
+      .lte("date", until)
+      .order("imported_at", { ascending: true }),
     client
       .from("social_posts")
       .select("reach,profile_visits,outbound_clicks,data_confidence")

@@ -80,6 +80,8 @@ export function findDuplicateKey(keys: readonly string[]): string | null {
  *     `integration_connections.provider`) — but the revenue import wrote
  *     `provider: input.source` (OPERATOR_ENTRY) and `source: input.platform`
  *     (ONLYFANS). Anyone reading the ledger by column name read it backwards.
+ *     BOTH importers now call this, so the ledger has one convention; rows
+ *     written before this change still carry the inverted one.
  *   - supabase-js RESOLVES with `{ error }` rather than throwing, so the
  *     surrounding try/catch never fired and a failed ledger write was silently
  *     lost. The returned error is checked explicitly.

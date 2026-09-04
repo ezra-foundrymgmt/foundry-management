@@ -14,11 +14,24 @@ import type { DataConfidence } from "@creatoros/domain";
  *
  * The design intent and the consumers were in direct contradiction. Holding two
  * claims about one creator-day is the right capability; what was missing is a
- * rule for which claim counts. That rule lives here, so every consumer applies
- * the same one.
+ * rule for which claim counts. That rule lives here.
  *
  * It is latent today only because a single source (OPERATOR_ENTRY) is in use.
  * Adding a second ingestion source is exactly what activates it.
+ *
+ * APPLIED AT THREE OF FIVE READERS, deliberately — the ones that produce a
+ * claim or a permanent artifact: daily-report.ts, baselines.ts and
+ * revenue-planner.ts. The two display reads in live-data.ts (the roster's
+ * 60-day revenue sparkline and the same figure on Creator 360) would also
+ * double-count and are NOT yet wired; they are display-only, so the error is
+ * visible rather than frozen or acted on. That is a reason to sequence it
+ * second, not a reason it is fine.
+ *
+ * KNOWN LIMITATION: the winner is chosen per ROW, not per field. If the losing
+ * row measured a metric the winning row left null, that measurement is
+ * dropped. Choosing per field would mix two readings into a composite row that
+ * no source ever reported, which is a worse failure for a baseline that gets
+ * frozen — but it does mean a partially-populated winner can lose information.
  */
 
 /** Strongest first: the claim to prefer when two sources describe one period. */
