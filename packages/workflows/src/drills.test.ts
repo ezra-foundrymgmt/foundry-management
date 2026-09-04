@@ -32,6 +32,7 @@ const madison: OnboardingCreator = {
   contactEmail: "madison@fictional.demo",
   timezone: "America/Los_Angeles",
   assignedTeam: true,
+  teamSlackUserIds: ["U_EZRA", "U_PAYTON"],
   boundariesCollected: true,
   baselineReady: false,
 };

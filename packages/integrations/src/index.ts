@@ -26,6 +26,24 @@ export interface SlackProvider {
     idempotencyKey: string;
   }): Promise<ProvisionedResource>;
   inviteMembers(resourceId: string, memberIds: string[]): Promise<void>;
+  /**
+   * Invites someone who is NOT a member of the workspace, by email, over Slack
+   * Connect.
+   *
+   * Separate from `inviteMembers` because a creator is not a colleague:
+   * `conversations.invite` takes workspace user ids and simply cannot reach
+   * them. It also resolves differently — the invite is an offer the creator
+   * accepts in their own Slack, so success here means "asked", not "joined".
+   *
+   * Returns a result rather than throwing, because Slack Connect depends on
+   * workspace plan and admin policy. An agency whose plan does not allow it
+   * still wants the rest of activation to complete, with this one step left
+   * visibly outstanding rather than the whole creator failing to onboard.
+   */
+  inviteExternalByEmail(
+    resourceId: string,
+    email: string,
+  ): Promise<{ invited: boolean; reason?: string }>;
   setTopic(resourceId: string, topic: string): Promise<void>;
   postMessage(resourceId: string, message: string): Promise<void>;
   archiveChannel(resourceId: string): Promise<void>;
@@ -164,6 +182,24 @@ export class LiveSlackProvider implements SlackProvider {
       channel: resourceId,
       users: memberIds.join(","),
     });
+  }
+  async inviteExternalByEmail(
+    resourceId: string,
+    email: string,
+  ): Promise<{ invited: boolean; reason?: string }> {
+    const response = await this.#call("conversations.inviteShared", {
+      channel: resourceId,
+      emails: [email],
+    });
+    if (response.ok) return { invited: true };
+    /**
+     * Already invited or already present is success, not failure — activation
+     * is re-runnable and must not report a step failed because it had already
+     * done its job.
+     */
+    const reason = response.error ?? "INVITE_SHARED_FAILED";
+    if (reason === "already_invited" || reason === "already_in_channel") return { invited: true };
+    return { invited: false, reason };
   }
   async setTopic(resourceId: string, topic: string): Promise<void> {
     await this.#requireOk("conversations.setTopic", {
@@ -459,8 +495,18 @@ export class MockSlackProvider implements SlackProvider {
     this.#resources.set(input.idempotencyKey, resource);
     return Promise.resolve(resource);
   }
-  inviteMembers(): Promise<void> {
+  readonly invited = new Map<string, string[]>();
+  readonly externalInvites = new Map<string, string[]>();
+  inviteMembers(resourceId: string, memberIds: string[]): Promise<void> {
+    this.invited.set(resourceId, [...(this.invited.get(resourceId) ?? []), ...memberIds]);
     return Promise.resolve();
+  }
+  inviteExternalByEmail(resourceId: string, email: string): Promise<{ invited: boolean }> {
+    this.externalInvites.set(resourceId, [
+      ...(this.externalInvites.get(resourceId) ?? []),
+      email,
+    ]);
+    return Promise.resolve({ invited: true });
   }
   setTopic(): Promise<void> {
     return Promise.resolve();
@@ -556,6 +602,9 @@ export class NotConfiguredSlackProvider implements SlackProvider {
     return Promise.reject(this.#error());
   }
   inviteMembers(): Promise<void> {
+    return Promise.reject(this.#error());
+  }
+  inviteExternalByEmail(): Promise<{ invited: boolean; reason?: string }> {
     return Promise.reject(this.#error());
   }
   setTopic(): Promise<void> {

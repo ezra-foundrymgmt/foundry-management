@@ -26,18 +26,20 @@ const madison: OnboardingCreator = {
   contactEmail: "madison@example.test",
   timezone: "America/Los_Angeles",
   assignedTeam: true,
+  teamSlackUserIds: ["U_EZRA", "U_PAYTON"],
   boundariesCollected: true,
   baselineReady: false,
 };
 
 function setup() {
   const repository = new MemoryOnboardingRepository();
+  const slack = new MockSlackProvider();
   const service = new OnboardingService(repository, {
-    slack: new MockSlackProvider(),
+    slack,
     notion: new MockNotionProvider(),
     files: new MockFileStorageProvider(),
   });
-  return { repository, service };
+  return { repository, service, slack };
 }
 
 describe("CREATOR_ACTIVATION_V1", () => {
@@ -340,5 +342,62 @@ describe("CREATOR_OFFBOARDING_V1", () => {
       "REQUEST_FINAL_FINANCIAL_RECONCILIATION",
       "MARK_CREATOR_FORMER",
     ]);
+  });
+});
+
+/**
+ * Both Slack channels were created correctly and then left empty: inviteMembers
+ * and setTopic were implemented on the provider and called by nothing, so
+ * activation finished with two private channels containing only the bot, and
+ * the welcome message posted to an audience of nobody.
+ */
+describe("creator Slack channels get the right people in them", () => {
+  function channelIdFor(run: Awaited<ReturnType<OnboardingService["start"]>>, step: string) {
+    return run.steps.find((s) => s.name === step)?.externalId ?? "";
+  }
+
+  it("puts the Foundry team in both channels", async () => {
+    const { service, slack } = setup();
+    const run = await service.start(madison);
+
+    for (const step of ["PROVISION_SLACK_CREATOR", "PROVISION_SLACK_INTERNAL"]) {
+      const channel = channelIdFor(run, step);
+      expect(channel, step).not.toBe("");
+      expect(slack.invited.get(channel), step).toEqual(["U_EZRA", "U_PAYTON"]);
+    }
+  });
+
+  it("invites the creator to their own channel over Slack Connect", async () => {
+    const { service, slack } = setup();
+    const run = await service.start(madison);
+    const creatorChannel = channelIdFor(run, "PROVISION_SLACK_CREATOR");
+    expect(slack.externalInvites.get(creatorChannel)).toEqual(["madison@example.test"]);
+  });
+
+  /**
+   * The one rule that must never bend. The internal channel is the team talking
+   * ABOUT the creator; putting them in it would expose candid notes, health
+   * scores and P&L discussion to the person they are about.
+   */
+  it("never invites the creator to the internal channel", async () => {
+    const { service, slack } = setup();
+    const run = await service.start(madison);
+    const internal = channelIdFor(run, "PROVISION_SLACK_INTERNAL");
+    expect(slack.externalInvites.get(internal)).toBeUndefined();
+  });
+
+  it("still provisions when nobody has linked a Slack identity yet", async () => {
+    // An empty roster is a real state on a new workspace. It must leave the
+    // channel empty rather than failing the whole activation.
+    const { service, slack } = setup();
+    const run = await service.start({ ...madison, teamSlackUserIds: [] });
+    expect(run.steps.find((s) => s.name === "PROVISION_SLACK_CREATOR")?.status).toBe("SUCCEEDED");
+    expect(slack.invited.get(channelIdFor(run, "PROVISION_SLACK_CREATOR"))).toEqual([]);
+  });
+
+  it("does not attempt a Slack Connect invite when no email is on file", async () => {
+    const { service, slack } = setup();
+    const run = await service.start({ ...madison, contactEmail: null });
+    expect(slack.externalInvites.get(channelIdFor(run, "PROVISION_SLACK_CREATOR"))).toBeUndefined();
   });
 });

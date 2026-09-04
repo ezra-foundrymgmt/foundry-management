@@ -28,6 +28,7 @@ export const onboardingCreators: Record<string, OnboardingCreator> = {
     contactEmail: "madison@fictional.demo",
     timezone: "America/Los_Angeles",
     assignedTeam: true,
+    teamSlackUserIds: [],
     boundariesCollected: true,
     baselineReady: false,
   },

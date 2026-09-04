@@ -70,6 +70,17 @@ export interface OnboardingCreator {
   contactEmail: string | null;
   timezone: string | null;
   assignedTeam: boolean;
+  /**
+   * Slack user ids for the Foundry people who belong in this creator's
+   * channels — the assigned owners, plus admins.
+   *
+   * Required, not optional. An empty list is a legitimate state (nobody has
+   * linked a Slack identity yet) but it must be an explicit one: the whole
+   * defect this fixes was channels created with nobody in them, and a field
+   * that could be silently omitted would reintroduce it one careless caller
+   * at a time.
+   */
+  teamSlackUserIds: string[];
   boundariesCollected: boolean;
   baselineReady: boolean;
 }
@@ -300,7 +311,7 @@ export class OnboardingService {
       if (existing.status !== "BLOCKED") return existing;
       const blockers = this.#prerequisiteBlockers(creator);
       if (blockers.length > 0) {
-        if (blockers.join(" ") !== existing.blockers.join(" ")) {
+        if (blockers.join("\u0000") !== existing.blockers.join("\u0000")) {
           existing.blockers = blockers;
           await this.repository.saveRun(existing);
         }
@@ -412,6 +423,56 @@ export class OnboardingService {
     return current;
   }
 
+  /**
+   * Puts the right people in a freshly created channel, and says what it is for.
+   *
+   * Creating the channel was never the hard part; both Slack steps did that
+   * correctly and then left the room empty. `inviteMembers` and `setTopic` were
+   * implemented on the provider and called by nothing, so activation completed
+   * with two private channels containing only the bot — and the welcome message
+   * posted into one of them with no audience.
+   *
+   * The two audiences differ in exactly one way, and it is the important one:
+   * the internal channel is the team talking ABOUT the creator, so the creator
+   * is never invited to it. Nothing here may invite an external address to an
+   * internal channel.
+   */
+  async #populateChannel(
+    channel: ProvisionedResource,
+    creator: OnboardingCreator,
+    audience: "creator" | "internal",
+  ): Promise<void> {
+    await this.providers.slack.inviteMembers(channel.externalId, creator.teamSlackUserIds);
+
+    await this.providers.slack.setTopic(
+      channel.externalId,
+      audience === "creator"
+        ? `${creator.stageName} and the Foundry team. Day-to-day coordination.`
+        : `Foundry internal for ${creator.stageName}. The creator is not in this channel.`,
+    );
+
+    if (audience !== "creator") return;
+
+    /**
+     * The creator is external, so they arrive over Slack Connect rather than as
+     * a workspace member. A failure here does not fail activation: Slack
+     * Connect depends on plan and admin policy, and an agency without it still
+     * wants every other step to complete, with this one left visibly
+     * outstanding for a human to finish by hand.
+     */
+    if (!creator.contactEmail) return;
+    const invite = await this.providers.slack.inviteExternalByEmail(
+      channel.externalId,
+      creator.contactEmail,
+    );
+    if (!invite.invited) {
+      await this.providers.slack.postMessage(
+        channel.externalId,
+        `Could not send ${creator.stageName} a Slack Connect invite automatically (${invite.reason ?? "unknown reason"}). Invite them by hand before using this channel.`,
+      );
+    }
+  }
+
   async #executeStep(
     name: ActivationStepName,
     creator: OnboardingCreator,
@@ -420,7 +481,7 @@ export class OnboardingService {
     const prefix = `creator:${creator.id}`;
     if (name === "PROVISION_SLACK_CREATOR") {
       const key = `${prefix}:slack:creator-channel:v1`;
-      return this.repository.claimProvisioningKey(
+      const channel = await this.repository.claimProvisioningKey(
         key,
         await this.providers.slack.createChannel({
           creatorId: creator.id,
@@ -429,10 +490,12 @@ export class OnboardingService {
           idempotencyKey: key,
         }),
       );
+      await this.#populateChannel(channel, creator, "creator");
+      return channel;
     }
     if (name === "PROVISION_SLACK_INTERNAL") {
       const key = `${prefix}:slack:internal-channel:v1`;
-      return this.repository.claimProvisioningKey(
+      const channel = await this.repository.claimProvisioningKey(
         key,
         await this.providers.slack.createChannel({
           creatorId: creator.id,
@@ -441,6 +504,8 @@ export class OnboardingService {
           idempotencyKey: key,
         }),
       );
+      await this.#populateChannel(channel, creator, "internal");
+      return channel;
     }
     if (name === "PROVISION_NOTION_HUB") {
       const key = `${prefix}:notion:creator-hub:v1`;

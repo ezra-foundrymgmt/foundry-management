@@ -130,9 +130,68 @@ export async function loadLiveOnboardingCreator(
     assignedTeam: Boolean(
       creator.assigned_creator_success_user_id || creator.assigned_growth_user_id,
     ),
+    teamSlackUserIds: await resolveTeamSlackUserIds(admin, organizationId, creator),
     boundariesCollected: (boundary.count ?? 0) > 0,
     baselineReady: (baseline.count ?? 0) > 0,
   };
+}
+
+/**
+ * Who belongs in this creator's Slack channels, as Slack user ids.
+ *
+ * The assigned owners, plus every super_admin — the owners because they run the
+ * account day to day, the admins because on a two-person agency the assignment
+ * fields are often still empty and a channel with nobody in it is worse than a
+ * channel with one extra person in it.
+ *
+ * Only members with a LINKED Slack identity can be invited; Slack takes user
+ * ids, and CreatorOS cannot invent one for a colleague who has never linked.
+ * An unlinked teammate is therefore silently absent from the channel, which is
+ * why `slack_user_identities` coverage is worth checking before the first real
+ * activation rather than discovering it from an empty room.
+ */
+async function resolveTeamSlackUserIds(
+  admin: ReturnType<typeof createSupabaseAdminClient> & object,
+  organizationId: string,
+  creator: { assigned_creator_success_user_id: string | null; assigned_growth_user_id: string | null },
+): Promise<string[]> {
+  const memberships = await admin
+    .from("organization_memberships")
+    .select("user_id,role")
+    .eq("organization_id", organizationId)
+    .eq("active", true);
+  if (memberships.error) return [];
+
+  const rows = z
+    .array(z.object({ user_id: z.string().uuid(), role: z.string().nullable() }))
+    .safeParse(memberships.data ?? []);
+  if (!rows.success) return [];
+
+  const wanted = new Set<string>(
+    [creator.assigned_creator_success_user_id, creator.assigned_growth_user_id].filter(
+      (id): id is string => typeof id === "string",
+    ),
+  );
+  for (const row of rows.data) if (row.role === "super_admin") wanted.add(row.user_id);
+  // Only people still active in the organization. A departed colleague must not
+  // be re-invited into a new creator's private channel.
+  const active = new Set(rows.data.map((row) => row.user_id));
+  const eligible = [...wanted].filter((id) => active.has(id));
+  if (eligible.length === 0) return [];
+
+  const identities = await admin
+    .from("slack_user_identities")
+    .select("user_id,slack_user_id")
+    .eq("organization_id", organizationId)
+    .in("user_id", eligible);
+  if (identities.error) return [];
+
+  const linked = z
+    .array(z.object({ user_id: z.string().uuid(), slack_user_id: z.string() }))
+    .safeParse(identities.data ?? []);
+  if (!linked.success) return [];
+
+  return [...new Set(linked.data.map((row) => row.slack_user_id))];
 }
 
 export class SupabaseOnboardingRepository implements OnboardingRepository {
