@@ -11,6 +11,7 @@ import { CreatorPriorityControl } from "@/components/creator-priority-control";
 import { OnboardingButton } from "@/components/onboarding-button";
 import { ActivationGates } from "@/components/activation-gates";
 import { MetricsImportPanel } from "@/components/metrics-import-panel";
+import { RevenuePlannerPanel } from "@/components/revenue-planner-panel";
 import { ReadinessPanel, type ReadinessState } from "@/components/readiness-panel";
 import { StatusBadge } from "@/components/status-badge";
 import {
@@ -241,6 +242,10 @@ export default async function CreatorPage({ params }: { params: Promise<{ creato
               canImportRevenue={hasPermission(access.session.role, "finance.update")}
               canImportSocial={hasPermission(access.session.role, "creator.update")}
             />
+          )}
+
+          {mock || !hasPermission(access.session.role, "analytics.read") ? null : (
+            <RevenuePlannerPanel creatorId={creator.id} />
           )}
 
           <section className="card card-pad">

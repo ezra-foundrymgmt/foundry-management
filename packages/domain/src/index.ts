@@ -5,5 +5,6 @@ export * from "./performance";
 export * from "./permissions";
 export * from "./pnl";
 export * from "./revenue-diagnostic";
+export * from "./revenue-plan";
 export * from "./seed";
 export * from "./types";

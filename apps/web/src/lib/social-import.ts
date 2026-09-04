@@ -28,18 +28,23 @@ import { findDuplicateKey, recordImportRun } from "@/lib/import-run";
 /**
  * Every metric is a REQUIRED key that may be null.
  *
- * This is the one place the social schema deliberately diverges from
- * `revenueRowSchema`, which made its metrics `.optional()`. An upsert writes
- * whatever the payload contains, so with optional keys a partial re-import — a
- * views-only correction, say — writes NULL over a reach that an earlier fuller
- * import had measured, and both readers coalesce NULL to 0. Reach silently
- * drops and the `reachChange <= -20` rule fires a bottleneck that nothing in
- * the world caused.
+ * The one place the social schema deliberately diverges from
+ * `revenueRowSchema`, which made its metrics `.optional()`.
+ *
+ * The hazard is STALE RETENTION, not nulling. Measured against staging rather
+ * than assumed: PostgREST builds `DO UPDATE SET` only from the columns present
+ * in the payload, so a re-import that omits a metric leaves the stored value
+ * untouched — it does not null it. So with optional keys, a second import that
+ * simply did not read `reach` leaves last week's reach sitting on the row,
+ * and the report then sums a figure from one measurement session as though it
+ * belonged to another. The row's `measured_at` would say one thing while one
+ * of its numbers came from somewhere else entirely.
  *
  * Requiring the key forces the caller to say which it means: `"reach": null`
- * is "I did not measure this", `"reach": 0` is "I measured zero". Omitting it
- * is a 400 rather than a guess. That is "unknown is not zero" applied to the
- * wire format instead of only to the database.
+ * is "I did not measure this", `"reach": 0` is "I measured zero", and either
+ * one is written, so the row is always a coherent snapshot of a single
+ * reading. Omitting it is a 400 rather than a guess. That is "unknown is not
+ * zero" applied to the wire format instead of only to the database.
  */
 const metric = z.number().int().min(0).max(MAX_SOCIAL_METRIC).nullable();
 
