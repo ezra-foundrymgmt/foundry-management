@@ -23,12 +23,14 @@ const STAGE_LABELS: Record<string, string> = {
 
 const BLOCKED_REASONS: Record<string, string> = {
   RATE_NOT_MEASURED: "This conversion has never been measured for this creator.",
-  RATE_IS_ZERO: "The measured conversion is zero, so no volume reaches the target.",
+  RATE_IS_ZERO:
+    "Measured, and zero: nothing converts at this step, so more input volume will not reach the target.",
   UPSTREAM_UNKNOWN: "Blocked by the gap below — fix that one first.",
 };
 
 const MESSAGES: Record<string, string> = {
   NO_BASELINE_FROZEN: "Freeze a baseline first. A plan needs measured conversion rates.",
+  PLANNER_DATABASE_FAILED: "The plan could not be built. Nothing changed.",
   CREATOR_NOT_FOUND: "That creator is not in this organization.",
   PERMISSION_DENIED: "Viewing plans requires analytics permissions.",
   AUTHENTICATION_REQUIRED: "Your session expired. Sign in again.",
@@ -82,26 +84,55 @@ export function RevenuePlannerPanel({ creatorId }: { creatorId: string }) {
   async function build() {
     setBusy(true);
     setError("");
-    const response = await fetch(`/api/creators/${creatorId}/plan`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        targetRevenue: Number(target),
-        periodStart,
-        periodEnd,
-      }),
-    });
-    const payload = (await response.json().catch(() => ({}))) as {
-      data?: PlanResponse;
-      error?: string;
-    };
-    setBusy(false);
-    if (!response.ok || !payload.data) {
-      setResult(null);
-      setError((payload.error && MESSAGES[payload.error]) ?? "The plan could not be built.");
+
+    /**
+     * The input filter strips everything but digits and dots, which still
+     * admits "1.2.3" and "." — both of which are NaN. JSON.stringify turns NaN
+     * into null, so the server would answer a generic INVALID_INPUT naming no
+     * field. Caught here so the message points at the box that is wrong.
+     */
+    const targetRevenue = Number(target);
+    if (!Number.isFinite(targetRevenue) || targetRevenue <= 0) {
+      setError("Enter a target revenue greater than zero.");
+      setBusy(false);
       return;
     }
-    setResult(payload.data);
+    if (periodStart > periodEnd) {
+      setError("The period ends before it starts.");
+      setBusy(false);
+      return;
+    }
+
+    /**
+     * Wrapped because `busy` must come down on every path. Both buttons carry
+     * `disabled={busy}`, so an unguarded rejection — a dropped connection is
+     * enough — left the panel stuck on "Building…" with no error and no way to
+     * close it. The import panel shipped this exact bug earlier in this
+     * session; writing the same shape twice is what a guarded helper would
+     * have prevented.
+     */
+    try {
+      const response = await fetch(`/api/creators/${creatorId}/plan`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ targetRevenue, periodStart, periodEnd }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        data?: PlanResponse;
+        error?: string;
+      };
+      if (!response.ok || !payload.data) {
+        setResult(null);
+        setError((payload.error && MESSAGES[payload.error]) ?? "The plan could not be built.");
+        return;
+      }
+      setResult(payload.data);
+    } catch {
+      setResult(null);
+      setError("The plan could not be requested. Check your connection and try again.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   if (!open)

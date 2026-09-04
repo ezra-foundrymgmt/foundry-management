@@ -61,17 +61,37 @@ export interface RevenuePlan {
 }
 
 /**
+ * Why a conversion rate is unusable, when it is.
+ *
+ * The distinction is the point. A creator whose reach was never ingested and a
+ * creator who genuinely converted nobody are in completely different
+ * situations: the first needs a measurement, the second needs a different
+ * offer. Both used to be reported as RATE_NOT_MEASURED, which told the
+ * operator to go and collect data they may already have.
+ */
+type RateFailure = "RATE_NOT_MEASURED" | "RATE_IS_ZERO";
+
+type MeasuredRate = { rate: number } | { rate: null; because: RateFailure };
+
+/**
  * A rate is only meaningful if BOTH sides of it were measured.
  *
- * Returns null rather than 0 for an unmeasured or zero denominator. A zero
- * conversion rate would make the inverted requirement infinite, and a null one
- * correctly says "this cannot be planned from what we know".
+ * Never returns a usable 0: a zero conversion makes the inverted requirement
+ * infinite, so it is reported as unusable rather than as a number. But it is
+ * reported as a MEASURED zero, which is a different fact from an absent one.
  */
-function rate(numerator: number, denominator: number, measured: boolean): number | null {
-  if (!measured) return null;
-  if (denominator <= 0) return null;
-  if (numerator <= 0) return null;
-  return numerator / denominator;
+function rate(numerator: number, denominator: number, measured: boolean): MeasuredRate {
+  if (!measured) return { rate: null, because: "RATE_NOT_MEASURED" };
+  /**
+   * Measured, but no usable ratio. Two shapes, one meaning:
+   *   - a zero DENOMINATOR: nothing entered this stage, so there is no
+   *     conversion to observe (0 buyers gives no revenue-per-buyer);
+   *   - a zero NUMERATOR: input entered and nothing came out.
+   * Either way the operator measured it and the answer is zero throughput,
+   * which is a finding about the funnel rather than a gap in the data.
+   */
+  if (denominator <= 0 || numerator <= 0) return { rate: null, because: "RATE_IS_ZERO" };
+  return { rate: numerator / denominator };
 }
 
 export interface PlanInput {
@@ -129,7 +149,7 @@ export function planRevenueTarget(input: PlanInput): RevenuePlan {
    * stage the rate converts FROM, so `conversions.reach` is
    * profileVisits/reach.
    */
-  const conversions: Record<FunnelStage, number | null> = {
+  const conversions: Record<FunnelStage, MeasuredRate> = {
     reach: rate(point.profileVisits, point.reach, measuredAt("reach") && measuredAt("profileVisits")),
     profileVisits: rate(
       point.outboundClicks,
@@ -159,8 +179,8 @@ export function planRevenueTarget(input: PlanInput): RevenuePlan {
   for (const stage of FUNNEL_STAGES) {
     const multiplier = input.rateMultipliers?.[stage];
     const current = conversions[stage];
-    if (multiplier === undefined || current === null) continue;
-    conversions[stage] = current * multiplier;
+    if (multiplier === undefined || current.rate === null) continue;
+    conversions[stage] = { rate: current.rate * multiplier };
   }
 
   const stages: PlannedStage[] = [];
@@ -175,7 +195,9 @@ export function planRevenueTarget(input: PlanInput): RevenuePlan {
    */
   const effectiveRevenuePerBuyer = conversions.firstBuyers;
   let downstreamRequirement: number | null =
-    effectiveRevenuePerBuyer === null ? null : input.targetRevenue / effectiveRevenuePerBuyer;
+    effectiveRevenuePerBuyer.rate === null
+      ? null
+      : input.targetRevenue / effectiveRevenuePerBuyer.rate;
 
   let upstreamBlocked = false;
   // Walk the funnel from the money upwards.
@@ -186,9 +208,13 @@ export function planRevenueTarget(input: PlanInput): RevenuePlan {
       stages.push({
         stage,
         required: downstreamRequirement === null ? null : Math.ceil(downstreamRequirement),
-        conversionRate: effectiveRevenuePerBuyer,
-        confidence: effectiveRevenuePerBuyer === null ? "UNKNOWN" : input.dataConfidence,
-        ...(downstreamRequirement === null ? { blockedBy: "RATE_NOT_MEASURED" as const } : {}),
+        conversionRate: effectiveRevenuePerBuyer.rate,
+        confidence: effectiveRevenuePerBuyer.rate === null ? "UNKNOWN" : input.dataConfidence,
+        // A creator with measured buyers who produced no revenue is a
+        // different problem from one whose revenue was never ingested.
+        ...(effectiveRevenuePerBuyer.rate === null
+          ? { blockedBy: effectiveRevenuePerBuyer.because }
+          : {}),
       });
       if (downstreamRequirement === null) upstreamBlocked = true;
       continue;
@@ -198,31 +224,33 @@ export function planRevenueTarget(input: PlanInput): RevenuePlan {
       stages.push({
         stage,
         required: null,
-        conversionRate: conversion,
+        conversionRate: conversion.rate,
         confidence: "UNKNOWN",
         blockedBy: "UPSTREAM_UNKNOWN",
       });
       continue;
     }
 
-    if (conversion === null) {
+    if (conversion.rate === null) {
       stages.push({
         stage,
         required: null,
         conversionRate: null,
         confidence: "UNKNOWN",
-        blockedBy: "RATE_NOT_MEASURED",
+        // The reason travels with the stage: RATE_IS_ZERO says the creator
+        // converted nobody here, which no amount of extra input volume fixes.
+        blockedBy: conversion.because,
       });
       upstreamBlocked = true;
       downstreamRequirement = null;
       continue;
     }
 
-    downstreamRequirement = (downstreamRequirement as number) / conversion;
+    downstreamRequirement = (downstreamRequirement as number) / conversion.rate;
     stages.push({
       stage,
       required: Math.ceil(downstreamRequirement),
-      conversionRate: conversion,
+      conversionRate: conversion.rate,
       confidence: input.dataConfidence,
     });
   }
@@ -232,7 +260,7 @@ export function planRevenueTarget(input: PlanInput): RevenuePlan {
 
   return {
     targetRevenue: input.targetRevenue,
-    revenuePerFirstBuyer,
+    revenuePerFirstBuyer: revenuePerFirstBuyer.rate,
     stages,
     complete: unplannable.length === 0,
     unplannable,

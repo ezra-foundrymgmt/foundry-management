@@ -265,3 +265,49 @@ describe("a scenario on the money stage moves the plan", () => {
     expect(scenario!.plan.stages.find((s) => s.stage === "reach")?.required).toBe(1_600_000);
   });
 });
+
+/**
+ * "Never measured" and "measured zero" are different facts, and the difference
+ * changes what the operator should do: the first means go and collect data,
+ * the second means the offer converts nobody and no amount of extra traffic
+ * fixes it. Both were reported as RATE_NOT_MEASURED.
+ */
+describe("a measured zero is distinguished from an absent measurement", () => {
+  it("reports RATE_IS_ZERO when the creator measurably converted nobody", () => {
+    // 2,000 clicks were measured, and they produced zero subscribers.
+    const plan = planRevenueTarget({
+      targetRevenue: 10_000,
+      measured: { ...measured, newSubscribers: 0, firstBuyers: 0, revenue: 0 },
+      dataConfidence: "MEASURED",
+    });
+    // The money stage cannot be valued, and says why: measured, and zero.
+    expect(plan.stages.find((s) => s.stage === "firstBuyers")?.blockedBy).toBe("RATE_IS_ZERO");
+  });
+
+  it("still reports RATE_NOT_MEASURED when the dimension was never ingested", () => {
+    const plan = planRevenueTarget({
+      targetRevenue: 10_000,
+      measured: { ...measured, reach: 0, profileVisits: 0, outboundClicks: 0 },
+      unmeasuredDimensions: ["reach", "profileVisits", "outboundClicks"],
+      dataConfidence: "MEASURED",
+    });
+    expect(plan.stages.find((s) => s.stage === "outboundClicks")?.blockedBy).toBe(
+      "RATE_NOT_MEASURED",
+    );
+  });
+
+  it("reports a measured-zero mid-funnel stage as zero, not as missing", () => {
+    // Buyers and revenue measured, but zero subscribers were acquired, so the
+    // newSubscribers -> firstBuyers rate has no input to convert.
+    const plan = planRevenueTarget({
+      targetRevenue: 10_000,
+      measured: { ...measured, outboundClicks: 0, newSubscribers: 0, firstBuyers: 5, revenue: 500 },
+      dataConfidence: "MEASURED",
+    });
+    expect(plan.stages.find((s) => s.stage === "newSubscribers")?.blockedBy).toBe("RATE_IS_ZERO");
+    // Everything upstream is blocked behind it, not independently missing.
+    expect(plan.stages.find((s) => s.stage === "reach")?.blockedBy).toBe("UPSTREAM_UNKNOWN");
+    // ...and the stage below it still plans, because it was measurable.
+    expect(plan.stages.find((s) => s.stage === "firstBuyers")?.required).toBe(100);
+  });
+});

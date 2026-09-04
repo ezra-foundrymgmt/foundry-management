@@ -41,6 +41,8 @@ export const planRequestSchema = z.object({
   /** The period the target applies to, used for pacing. */
   periodStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   periodEnd: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  /** Which baseline to plan from. Matches freezeBaseline's own default. */
+  baselineType: z.string().trim().min(1).max(40).default("ROLLING_30D"),
 });
 
 export class PlannerError extends Error {
@@ -71,6 +73,7 @@ function daysBetween(start: string, end: string): number {
 export interface CreatorRevenuePlan {
   creatorId: string;
   baselineVersion: number;
+  baselineType: string;
   baselinePeriod: { start: string; end: string };
   plan: RevenuePlan;
   scenarios: ScenarioResult[];
@@ -109,11 +112,23 @@ export async function buildCreatorRevenuePlan(
   if (creator.error) throw databaseFailure("creator-lookup", creator.error);
   if (!creator.data) throw new PlannerError("CREATOR_NOT_FOUND", 404);
 
+  /**
+   * The latest baseline OF ONE TYPE.
+   *
+   * `creator_baselines` is unique(creator_id, baseline_type, version), so
+   * versions restart per type. Ordering by version alone across every type
+   * therefore returns whichever type happens to have the highest number — a
+   * QUARTERLY at v5 would beat the ROLLING_30D at v3 that the operator meant,
+   * and nothing in the response would say which one the plan came from.
+   * Pinning the type makes the answer deterministic, and it is echoed back so
+   * the figure can be audited.
+   */
   const baseline = await client
     .from("creator_baselines")
-    .select("metrics_json,period_start,period_end,version")
+    .select("metrics_json,period_start,period_end,version,baseline_type")
     .eq("organization_id", session.organizationId)
     .eq("creator_id", creatorId)
+    .eq("baseline_type", input.baselineType)
     .order("version", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -124,6 +139,7 @@ export async function buildCreatorRevenuePlan(
     period_start?: string;
     period_end?: string;
     version?: number;
+    baseline_type?: string;
   } | null;
   const metrics = metricsSchema.safeParse(row?.metrics_json);
   /**
@@ -188,6 +204,7 @@ export async function buildCreatorRevenuePlan(
   return {
     creatorId,
     baselineVersion: row?.version ?? 0,
+    baselineType: row?.baseline_type ?? input.baselineType,
     baselinePeriod: { start: row?.period_start ?? "", end: row?.period_end ?? "" },
     plan: planRevenueTarget(planInput),
     scenarios: planScenarios(planInput, SCENARIOS),
