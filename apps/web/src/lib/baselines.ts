@@ -4,6 +4,7 @@ import type { AppSession } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { appendAudit } from "@/lib/audit";
 import { logEvent } from "@/lib/observability";
+import { preferOneRowPerPeriod } from "@/lib/metric-rows";
 
 /**
  * Freezes the creator's own normal, which every later report is measured against.
@@ -51,6 +52,10 @@ function admin() {
 
 const revenueRowsSchema = z.array(
   z.object({
+    date: z.string(),
+    platform: z.string().nullable().optional(),
+    imported_at: z.string().nullable().optional(),
+    data_confidence: z.string().nullable().optional(),
     creator_platform_receipts: z.coerce.number().nullable(),
     new_subscribers: z.coerce.number().nullable(),
     first_buyers: z.coerce.number().nullable(),
@@ -101,7 +106,7 @@ export async function freezeBaseline(
   const [revenue, social] = await Promise.all([
     client
       .from("creator_revenue_daily")
-      .select("creator_platform_receipts,new_subscribers,first_buyers")
+      .select("date,platform,imported_at,data_confidence,creator_platform_receipts,new_subscribers,first_buyers")
       .eq("organization_id", session.organizationId)
       .eq("creator_id", creatorId)
       .gte("date", input.periodStart)
@@ -117,7 +122,13 @@ export async function freezeBaseline(
   if (revenue.error) throw databaseFailure("revenue-read", revenue.error);
   if (social.error) throw databaseFailure("social-read", social.error);
 
-  const revenueRows = revenueRowsSchema.parse(revenue.data ?? []);
+  // Two sources reporting one creator-day are two claims about that day.
+  // Summing both double-counts it -- and a baseline is frozen permanently, so
+  // the inflated figure would be inherited by every future comparison.
+  const revenueRows = preferOneRowPerPeriod(
+    revenueRowsSchema.parse(revenue.data ?? []),
+    (row) => `${row.date}|${row.platform ?? ""}`,
+  );
   const socialRows = socialRowsSchema.parse(social.data ?? []);
   if (revenueRows.length === 0 && socialRows.length === 0)
     throw new BaselineError("NO_MEASURED_DATA_IN_PERIOD", 409);

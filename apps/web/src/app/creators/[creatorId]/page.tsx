@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import {
   creators as demoCreators,
+  hasPermission,
   reports as demoReports,
   tasks as demoTasks,
 } from "@creatoros/domain";
@@ -9,6 +10,7 @@ import { AccessDenied } from "@/components/access-denied";
 import { CreatorPriorityControl } from "@/components/creator-priority-control";
 import { OnboardingButton } from "@/components/onboarding-button";
 import { ActivationGates } from "@/components/activation-gates";
+import { MetricsImportPanel } from "@/components/metrics-import-panel";
 import { ReadinessPanel, type ReadinessState } from "@/components/readiness-panel";
 import { StatusBadge } from "@/components/status-badge";
 import {
@@ -225,6 +227,19 @@ export default async function CreatorPage({ params }: { params: Promise<{ creato
               team={team}
               boundaryCount={boundaries.length}
               baselineFrozen={baselineFrozen}
+            />
+          )}
+
+          {/*
+            Sits directly under the activation gates because the checklist
+            there tells the operator to import baseline figures, and until now
+            there was nowhere in the product to do it.
+          */}
+          {mock ? null : (
+            <MetricsImportPanel
+              creatorId={creator.id}
+              canImportRevenue={hasPermission(access.session.role, "finance.update")}
+              canImportSocial={hasPermission(access.session.role, "creator.update")}
             />
           )}
 

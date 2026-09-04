@@ -7,6 +7,7 @@ import {
   type MetricPoint,
 } from "@creatoros/domain";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { preferOneRowPerPeriod } from "@/lib/metric-rows";
 
 const metricPointSchema = z.object({
   date: z.string(),
@@ -21,6 +22,8 @@ const metricPointSchema = z.object({
 const revenueRowsSchema = z.array(
   z.object({
     date: z.string(),
+    platform: z.string().nullable().optional(),
+    imported_at: z.string().nullable().optional(),
     creator_platform_receipts: z.coerce.number().nullable(),
     new_subscribers: z.coerce.number().nullable(),
     first_buyers: z.coerce.number().nullable(),
@@ -254,7 +257,7 @@ export async function produceDailyCreatorReport(input: {
   const [revenue, social] = await Promise.all([
     client
       .from("creator_revenue_daily")
-      .select("date,creator_platform_receipts,new_subscribers,first_buyers,data_confidence")
+      .select("date,creator_platform_receipts,new_subscribers,first_buyers,data_confidence,platform,imported_at")
       .eq("organization_id", input.organizationId)
       .eq("creator_id", input.creatorId)
       .gte("date", since)
@@ -273,7 +276,12 @@ export async function produceDailyCreatorReport(input: {
   if (revenue.error) throw new Error(`REVENUE_READ_FAILED: ${revenue.error.message}`);
   if (social.error) throw new Error(`SOCIAL_READ_FAILED: ${social.error.message}`);
 
-  const revenueRows = revenueRowsSchema.parse(revenue.data ?? []);
+  // Two sources reporting one creator-day are two claims about the same
+  // day, not two days. Summing both double-counts it.
+  const revenueRows = preferOneRowPerPeriod(
+    revenueRowsSchema.parse(revenue.data ?? []),
+    (row) => `${row.date}|${row.platform ?? ""}`,
+  );
   const socialRows = socialRowsSchema.parse(social.data ?? []);
   if (revenueRows.length === 0 && socialRows.length === 0)
     return { produced: false, reason: "NO_METRICS_FOR_PERIOD" };
