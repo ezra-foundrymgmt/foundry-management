@@ -1,8 +1,50 @@
 import "server-only";
-import type { WorkDepartment } from "@creatoros/domain";
+import { z } from "zod";
+import {
+  composeWelcomePackage,
+  renderWelcomePackage,
+  type WelcomePackage,
+  type WorkDepartment,
+} from "@creatoros/domain";
 import type { ActivationRecordPort, OnboardingCreator } from "@creatoros/workflows";
 import { COMPETITOR_RESEARCH_KEY, evaluateActivationReadiness } from "@/lib/activation-readiness";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+
+/**
+ * Shapes for the welcome package's inputs.
+ *
+ * Every one is parsed with safeParse and degrades to an absent section rather
+ * than throwing: the package is composed inside an activation step, and a
+ * malformed row must not strand a creator mid-onboarding.
+ */
+const welcomeMetricsSchema = z.object({
+  date: z.string(),
+  reach: z.coerce.number(),
+  profileVisits: z.coerce.number(),
+  outboundClicks: z.coerce.number(),
+  newSubscribers: z.coerce.number(),
+  firstBuyers: z.coerce.number(),
+  revenue: z.coerce.number(),
+  unmeasuredDimensions: z.array(z.string()).default([]),
+});
+const welcomeUserSchema = z.array(
+  z.object({ id: z.string(), display_name: z.string().nullable(), email: z.string() }),
+);
+const welcomeBoundarySchema = z.array(
+  z.object({
+    boundary_type: z.string().nullable(),
+    description: z.string().nullable(),
+    severity: z.string().nullable(),
+  }),
+);
+const welcomeTaskSchema = z.array(
+  z.object({
+    title: z.string(),
+    department: z.string().nullable(),
+    due_at: z.string().nullable(),
+  }),
+);
+const welcomeCommissionSchema = z.object({ commission_rate: z.coerce.number().nullable() });
 
 /**
  * These tasks predate WORK_DEPARTMENTS and were written with their own casing
@@ -280,15 +322,34 @@ export class SupabaseActivationRecordPort implements ActivationRecordPort {
     );
   }
 
+  /**
+   * Composes the welcome package and stores it on the task that asks for it.
+   *
+   * This step used to create a bare "Send welcome package to X" reminder and
+   * stop — the system's entire contribution to the artifact a creator judges
+   * Foundry on was a to-do item. It now assembles the real document from what
+   * CreatorOS already holds and writes it into the task description, so the
+   * operator opens the task and finds the thing rather than a prompt to write
+   * it.
+   *
+   * When the package is incomplete the task says which inputs are missing and
+   * is raised to HIGH, because sending a welcome document with a hole in it is
+   * worse than sending it late.
+   */
   async generateWelcomePackage(creator: OnboardingCreator): Promise<void> {
+    const pkg = await this.#composeWelcomePackage(creator);
+    const complete = pkg.blockingGaps.length === 0;
     await this.#upsert(
       "tasks",
       {
         creator_id: creator.id,
-        title: `Send welcome package to ${creator.stageName}`,
+        title: complete
+          ? `Send welcome package to ${creator.stageName}`
+          : `Complete welcome package for ${creator.stageName} (${pkg.blockingGaps.length} gap${pkg.blockingGaps.length === 1 ? "" : "s"})`,
+        description: renderWelcomePackage(pkg),
         department: CREATOR_SUCCESS,
         status: "OPEN",
-        priority: "MEDIUM",
+        priority: complete ? "MEDIUM" : "HIGH",
         requested_by: this.actorUserId,
         source_type: "CREATOR_ACTIVATION_V1",
         idempotency_key: `activation:${creator.id}:welcome-package`,
@@ -296,6 +357,122 @@ export class SupabaseActivationRecordPort implements ActivationRecordPort {
       },
       "organization_id,idempotency_key",
     );
+  }
+
+  /**
+   * Gathers the package's inputs from the records activation has already
+   * written.
+   *
+   * Every read is best-effort: a failure here must degrade the document to a
+   * stated gap, never fail the activation step. A welcome package that cannot
+   * be composed is a task the operator finishes by hand; a failed activation is
+   * a creator stuck in onboarding.
+   */
+  async #composeWelcomePackage(creator: OnboardingCreator): Promise<WelcomePackage> {
+    const admin = this.#admin();
+    const scope = { organization_id: this.organizationId, creator_id: creator.id };
+
+    const [baselineRow, boundaryRows, taskRows, ownerRows, scheduleRow, pnlRow] = await Promise.all([
+      admin
+        .from("creator_baselines")
+        .select("metrics_json,period_start,period_end")
+        .match(scope)
+        .order("version", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      admin
+        .from("creator_boundaries")
+        .select("boundary_type,description,severity")
+        .match(scope)
+        .eq("active", true),
+      admin
+        .from("tasks")
+        .select("title,department,due_at")
+        .match(scope)
+        .eq("source_type", "CREATOR_ACTIVATION_V1"),
+      admin
+        .from("creators")
+        .select("assigned_creator_success_user_id,assigned_growth_user_id")
+        .eq("organization_id", this.organizationId)
+        .eq("id", creator.id)
+        .maybeSingle(),
+      admin
+        .from("creator_report_schedules")
+        .select("cadence")
+        .match(scope)
+        .eq("active", true)
+        .order("cadence", { ascending: true })
+        .limit(1)
+        .maybeSingle(),
+      admin
+        .from("creator_pnl_periods")
+        .select("commission_rate")
+        .match(scope)
+        .order("period_start", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
+
+    const metrics = welcomeMetricsSchema.safeParse(baselineRow.data?.metrics_json);
+    const period = baselineRow.data as { period_start?: string; period_end?: string } | null;
+
+    const owners = ownerRows.data as {
+      assigned_creator_success_user_id?: string | null;
+      assigned_growth_user_id?: string | null;
+    } | null;
+    const ownerIds = [
+      owners?.assigned_creator_success_user_id,
+      owners?.assigned_growth_user_id,
+    ].filter((id): id is string => typeof id === "string");
+    const team: Array<{ name: string; role: string }> = [];
+    if (ownerIds.length > 0) {
+      const people = await admin.from("users").select("id,display_name,email").in("id", ownerIds);
+      const parsed = welcomeUserSchema.safeParse(people.data ?? []);
+      if (parsed.success)
+        for (const person of parsed.data)
+          team.push({
+            name: person.display_name ?? person.email,
+            role:
+              person.id === owners?.assigned_creator_success_user_id ? "Creator Success" : "Growth",
+          });
+    }
+
+    const boundaries = welcomeBoundarySchema.safeParse(boundaryRows.data ?? []);
+    const commitments = welcomeTaskSchema.safeParse(taskRows.data ?? []);
+    const commission = welcomeCommissionSchema.safeParse(pnlRow.data);
+    const cadence = (scheduleRow.data as { cadence?: string } | null)?.cadence;
+
+    return composeWelcomePackage({
+      stageName: creator.stageName,
+      team,
+      baseline:
+        metrics.success && period?.period_start && period?.period_end
+          ? {
+              metrics: metrics.data,
+              periodStart: period.period_start,
+              periodEnd: period.period_end,
+              unmeasuredDimensions: metrics.data.unmeasuredDimensions,
+              dataConfidence: "MEASURED",
+            }
+          : null,
+      boundaries: boundaries.success
+        ? boundaries.data.map((row) => ({
+            boundaryType: row.boundary_type ?? "GENERAL",
+            description: row.description ?? "",
+            severity: row.severity ?? "UNKNOWN",
+          }))
+        : [],
+      commitments: commitments.success
+        ? commitments.data.map((row) => ({
+            title: row.title,
+            owner: row.department ?? "Foundry",
+            dueAt: row.due_at ? row.due_at.slice(0, 10) : null,
+          }))
+        : [],
+      commissionRate: commission.success ? commission.data.commission_rate : null,
+      reportingCadence: cadence === "DAILY" || cadence === "WEEKLY" ? cadence : null,
+      creatorTimezone: creator.timezone,
+    });
   }
 
   async markProvisioningComplete(creator: OnboardingCreator): Promise<void> {
