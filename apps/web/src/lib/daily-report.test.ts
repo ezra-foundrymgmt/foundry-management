@@ -446,3 +446,139 @@ describe("the declared window matches the queried window", () => {
     expect(boundFor("creator_revenue_daily", "gte")?.value).toBe("2026-08-24");
   });
 });
+
+/**
+ * The guards that make a second ingestion path safe.
+ *
+ * `social_posts` has no writer yet, so every one of these paths is currently
+ * unreachable — which is exactly why they need pinning before one exists. The
+ * skip above fires only when BOTH dimensions are empty, so the first social
+ * row that ever lands changes the behaviour of every creator whose revenue
+ * reporting has gone quiet.
+ */
+describe("a dimension nobody measured is not compared as though it read zero", () => {
+  function seed(options: {
+    revenue?: Array<Record<string, unknown>>;
+    social?: Array<Record<string, unknown>>;
+    baseline: Record<string, unknown>;
+  }) {
+    tables.set("creator_baselines", {
+      data: { metrics_json: options.baseline, period_start: "2026-08-28", period_end: "2026-09-03" },
+      error: null,
+    });
+    tables.set("creator_revenue_daily", { data: options.revenue ?? [], error: null });
+    tables.set("social_posts", { data: options.social ?? [], error: null });
+    tables.set("daily_creator_reports", {
+      data: { id: "55555555-5555-4555-8555-555555555555" },
+      error: null,
+    });
+  }
+
+  function quality() {
+    const write = writes.find((entry) => entry.table === "daily_creator_reports");
+    return write?.payload["data_quality_json"] as {
+      comparisons: Record<string, number | null>;
+      unmeasuredThisWindow: string[];
+      unmeasuredInBaseline: string[];
+      incomparableDimensions: string[];
+    };
+  }
+
+  it("does not invent a revenue collapse for a creator whose revenue was never ingested", async () => {
+    // Social data present, revenue absent. Before the guard the revenue sum was
+    // 0 against a non-zero baseline, i.e. -100%, and the rules engine read that
+    // as a catastrophic collapse rather than as an absent measurement.
+    seed({
+      social: [{ reach: 5000, profile_visits: 400, outbound_clicks: 100 }],
+      baseline: baselineMetrics,
+    });
+
+    const result = await produceDailyCreatorReport({ organizationId: ORG, creatorId: CREATOR });
+    expect(result.produced).toBe(true);
+
+    expect(quality().comparisons["revenue"]).toBeNull();
+    expect(quality().comparisons["acquisition"]).toBeNull();
+    expect(quality().unmeasuredThisWindow).toEqual(
+      expect.arrayContaining(["newSubscribers", "firstBuyers", "revenue"]),
+    );
+  });
+
+  it("still compares the dimension that WAS measured", async () => {
+    // The guard must neutralise only the absent dimension. Neutralising the
+    // whole report would trade a false alarm for a blind spot.
+    seed({
+      social: [{ reach: 20_000, profile_visits: 400, outbound_clicks: 100 }],
+      baseline: baselineMetrics,
+    });
+
+    await produceDailyCreatorReport({ organizationId: ORG, creatorId: CREATOR });
+    expect(quality().comparisons["reach"]).not.toBeNull();
+  });
+
+  /**
+   * The baseline marker is EXPLANATORY, not load-bearing, and this test says
+   * so deliberately.
+   *
+   * A dimension the freeze recorded as unmeasured also stored 0 for it, and a
+   * zero baseline already yields a null comparison — so neutralising it again
+   * changes no arithmetic. What the marker buys is the ability to tell "reach
+   * 0 because nobody measured it" from "reach 0 because it was measured at
+   * zero", in the one artifact that is permanent. Asserting it appears in the
+   * report's data quality is therefore the honest assertion; asserting it
+   * changes the comparison would pass for the wrong reason.
+   */
+  it("carries the baseline's record of what it never measured into the report", async () => {
+    seed({
+      revenue: [{ date: "2026-09-01", creator_platform_receipts: 900, new_subscribers: 18, first_buyers: 5 }],
+      social: [{ reach: 50_000, profile_visits: 900, outbound_clicks: 300 }],
+      baseline: {
+        ...baselineMetrics,
+        reach: 0,
+        profileVisits: 0,
+        outboundClicks: 0,
+        unmeasuredDimensions: ["reach", "profileVisits", "outboundClicks"],
+      },
+    });
+
+    await produceDailyCreatorReport({ organizationId: ORG, creatorId: CREATOR });
+    // The marker reaches the report, which is the whole point of storing it.
+    expect(quality().unmeasuredInBaseline).toEqual(
+      expect.arrayContaining(["reach", "profileVisits", "outboundClicks"]),
+    );
+    expect(quality().incomparableDimensions).toEqual(expect.arrayContaining(["reach"]));
+    // ...while the revenue side, measured on both sides, still compares.
+    expect(quality().comparisons["revenue"]).not.toBeNull();
+  });
+
+  it("ignores a stored marker naming something that is not a real dimension", async () => {
+    // metrics_json is free-form and may have been written by older code; a
+    // bogus entry must not silently zero a dimension that IS comparable.
+    seed({
+      revenue: [{ date: "2026-09-01", creator_platform_receipts: 900, new_subscribers: 18, first_buyers: 5 }],
+      baseline: { ...baselineMetrics, unmeasuredDimensions: ["revenue; drop table", "__proto__"] },
+    });
+
+    await produceDailyCreatorReport({ organizationId: ORG, creatorId: CREATOR });
+    expect(quality().comparisons["revenue"]).not.toBeNull();
+    expect(quality().incomparableDimensions).not.toContain("revenue");
+  });
+
+  it("still refuses outright when nothing at all was measured", async () => {
+    seed({ baseline: baselineMetrics });
+    expect(await produceDailyCreatorReport({ organizationId: ORG, creatorId: CREATOR })).toEqual({
+      produced: false,
+      reason: "NO_METRICS_FOR_PERIOD",
+    });
+  });
+
+  it("reads a baseline frozen before the marker existed", async () => {
+    // Backward compatibility: the marker is absent on every baseline frozen to
+    // date, and those must keep producing reports rather than throwing.
+    seed({
+      revenue: [{ date: "2026-09-01", creator_platform_receipts: 900, new_subscribers: 18, first_buyers: 5 }],
+      baseline: baselineMetrics,
+    });
+    const result = await produceDailyCreatorReport({ organizationId: ORG, creatorId: CREATOR });
+    expect(result.produced).toBe(true);
+  });
+});

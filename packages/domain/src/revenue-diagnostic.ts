@@ -1,5 +1,5 @@
 import { safeRate } from "./performance";
-import type { DailyReport, MetricPoint, Recommendation } from "./types";
+import type { DailyReport, DataConfidence, MetricPoint, Recommendation } from "./types";
 
 export interface DiagnosticInput {
   creatorId: string;
@@ -9,6 +9,19 @@ export interface DiagnosticInput {
   healthBand: DailyReport["healthBand"];
   /** null when the buffer has never been measured. Not the same as zero days. */
   contentBufferDays: number | null;
+  /**
+   * How good the measurements behind `current` actually are — the WEAKEST
+   * confidence among the rows that fed it, since a sum is only as trustworthy
+   * as its worst input.
+   *
+   * Required rather than defaulted. Every metric-derived recommendation below
+   * was stamped `confidence: "MEASURED"` unconditionally, so a figure an
+   * operator entered as ESTIMATED produced a recommendation asserting it had
+   * been measured — and a recommendation becomes a real assigned task in one
+   * click. The import path has demanded a data_confidence on every row since it
+   * was written; the diagnostic threw it away.
+   */
+  dataConfidence: DataConfidence;
 }
 
 function percentChange(current: number, baseline: number): number | null {
@@ -56,7 +69,7 @@ export function generateDailyReport(input: DiagnosticInput): DailyReport {
       priority: "HIGH",
       suggestedOwner: "Revenue Lead",
       dueInDays: 1,
-      confidence: "MEASURED",
+      confidence: input.dataConfidence,
       sourceRule: ruleId,
     });
   } else if (reachChange !== null && reachChange <= -20 && input.current.reach >= 1000) {
@@ -74,7 +87,7 @@ export function generateDailyReport(input: DiagnosticInput): DailyReport {
       priority: "HIGH",
       suggestedOwner: "Growth Lead",
       dueInDays: 1,
-      confidence: "MEASURED",
+      confidence: input.dataConfidence,
       sourceRule: ruleId,
     });
   }
@@ -95,7 +108,11 @@ export function generateDailyReport(input: DiagnosticInput): DailyReport {
       priority: "CRITICAL",
       suggestedOwner: "Creator Success",
       dueInDays: 1,
-      confidence: "MEASURED",
+      // Deliberately not input.dataConfidence: this rule reads
+      // creators.current_content_buffer_days, which carries no import
+      // provenance at all, so neither the metrics confidence nor "MEASURED"
+      // honestly describes it.
+      confidence: "UNKNOWN",
       sourceRule: "OPS-CONTENT-BUFFER-CRITICAL-001",
     });
   }

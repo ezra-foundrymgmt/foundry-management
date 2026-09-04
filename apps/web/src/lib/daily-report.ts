@@ -1,6 +1,11 @@
 import "server-only";
 import { z } from "zod";
-import { generateDailyReport, healthBand, type MetricPoint } from "@creatoros/domain";
+import {
+  generateDailyReport,
+  healthBand,
+  type DataConfidence,
+  type MetricPoint,
+} from "@creatoros/domain";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 const metricPointSchema = z.object({
@@ -19,6 +24,7 @@ const revenueRowsSchema = z.array(
     creator_platform_receipts: z.coerce.number().nullable(),
     new_subscribers: z.coerce.number().nullable(),
     first_buyers: z.coerce.number().nullable(),
+    data_confidence: z.string().nullable().optional(),
   }),
 );
 
@@ -27,6 +33,7 @@ const socialRowsSchema = z.array(
     reach: z.coerce.number().nullable(),
     profile_visits: z.coerce.number().nullable(),
     outbound_clicks: z.coerce.number().nullable(),
+    data_confidence: z.string().nullable().optional(),
   }),
 );
 
@@ -113,6 +120,73 @@ function periodLengthInDays(start?: string | null, end?: string | null): number 
 }
 
 /**
+ * The weakest confidence among the rows that fed a report.
+ *
+ * A sum is only as trustworthy as its worst input: one ESTIMATED day inside a
+ * seven-day window makes the total estimated, not measured. Ordered weakest
+ * first so the first match wins.
+ *
+ * An unrecognised or absent value counts as UNKNOWN rather than being skipped.
+ * The column is `not null default 'UNKNOWN'` in the schema, but these rows may
+ * predate the import path entirely, and treating an unreadable provenance as
+ * "fine" is the precise mistake this whole change exists to stop.
+ */
+function weakestConfidence(values: ReadonlyArray<string | null | undefined>): DataConfidence {
+  const ordered: readonly DataConfidence[] = [
+    "UNKNOWN",
+    "ESTIMATED",
+    "PARTIALLY_MEASURED",
+    "MEASURED",
+  ];
+  if (values.length === 0) return "UNKNOWN";
+  let weakest = ordered.length - 1;
+  for (const value of values) {
+    const index = ordered.indexOf((value ?? "UNKNOWN") as DataConfidence);
+    weakest = Math.min(weakest, index === -1 ? 0 : index);
+  }
+  return ordered[weakest] ?? "UNKNOWN";
+}
+
+/** The comparison dimensions, split by the table that measures each. */
+const SOCIAL_DIMENSIONS = ["reach", "profileVisits", "outboundClicks"] as const;
+const REVENUE_DIMENSIONS = ["newSubscribers", "firstBuyers", "revenue"] as const;
+type MetricDimension = (typeof SOCIAL_DIMENSIONS)[number] | (typeof REVENUE_DIMENSIONS)[number];
+
+const ALL_DIMENSIONS: readonly string[] = [...SOCIAL_DIMENSIONS, ...REVENUE_DIMENSIONS];
+
+function isMetricDimension(value: string): value is MetricDimension {
+  return ALL_DIMENSIONS.includes(value);
+}
+
+/**
+ * Reads the measurement provenance `freezeBaseline` stores beside the numbers.
+ *
+ * Tolerant on purpose: baselines frozen before that marker existed have no
+ * such key, and they must still be readable. An absent marker is treated as
+ * "nothing is known to be unmeasured", which is the pre-existing behaviour.
+ */
+const baselineUnmeasuredSchema = z.object({
+  unmeasuredDimensions: z.array(z.string()).default([]),
+});
+
+/**
+ * Zeroes the baseline for dimensions that cannot honestly be compared.
+ *
+ * A zero baseline is the rules engine's existing signal for "incomparable":
+ * `percentChange` returns null for it and every rule requires a non-null
+ * change. So this neutralises exactly those dimensions and leaves the rest
+ * untouched.
+ */
+function withIncomparableDimensionsZeroed(
+  point: MetricPoint,
+  incomparable: ReadonlySet<MetricDimension>,
+): MetricPoint {
+  const zeroed = { ...point };
+  for (const dimension of incomparable) zeroed[dimension] = 0;
+  return zeroed;
+}
+
+/**
  * Scales a summed MetricPoint by a window ratio.
  *
  * `date` is carried through untouched: it labels the point, it is not a
@@ -180,14 +254,14 @@ export async function produceDailyCreatorReport(input: {
   const [revenue, social] = await Promise.all([
     client
       .from("creator_revenue_daily")
-      .select("date,creator_platform_receipts,new_subscribers,first_buyers")
+      .select("date,creator_platform_receipts,new_subscribers,first_buyers,data_confidence")
       .eq("organization_id", input.organizationId)
       .eq("creator_id", input.creatorId)
       .gte("date", since)
       .lte("date", until),
     client
       .from("social_posts")
-      .select("reach,profile_visits,outbound_clicks")
+      .select("reach,profile_visits,outbound_clicks,data_confidence")
       .eq("organization_id", input.organizationId)
       .eq("creator_id", input.creatorId)
       .gte("published_at", `${since}T00:00:00.000Z`)
@@ -230,8 +304,49 @@ export async function produceDailyCreatorReport(input: {
    * subscribers, 1000 reach -- meaningful against the window actually measured.
    */
   const baselineDays = periodLengthInDays(baselineRow?.period_start, baselineRow?.period_end);
-  const comparable =
+  const scaled =
     baselineDays === null ? baseline.data : scaleMetricPoint(baseline.data, CURRENT_WINDOW_DAYS / baselineDays);
+
+  /**
+   * A dimension nobody measured must not be compared as though it read zero.
+   *
+   * Two ways that was happening, both of which get worse the moment a second
+   * ingestion path exists:
+   *
+   * - The skip above fires only when BOTH dimensions are empty. So a creator
+   *   with social data and no revenue data produced `revenue: 0`, and
+   *   `percentChange(0, baselineRevenue)` is -100% -- a fabricated "revenue
+   *   collapsed" bottleneck for a creator whose revenue was simply never
+   *   ingested. Today social_posts is empty so this cannot fire; it fires on
+   *   the first social row that lands.
+   * - Symmetrically, every baseline frozen so far summed reach over an empty
+   *   social table and stored 0. Once reach IS ingested, the current side
+   *   climbs while the baseline stays 0.
+   *
+   * The fix reuses the convention the rules engine already has rather than
+   * inventing one: `percentChange` returns null for a baseline of zero, and
+   * every rule requires a non-null change. So zeroing the baseline for a
+   * dimension that either side failed to measure makes that dimension
+   * incomparable, which is exactly the truth -- and no rule can fire on it.
+   */
+  const unmeasuredNow = [
+    ...(socialRows.length === 0 ? SOCIAL_DIMENSIONS : []),
+    ...(revenueRows.length === 0 ? REVENUE_DIMENSIONS : []),
+  ];
+  const storedMarker = baselineUnmeasuredSchema.safeParse(baselineRow?.metrics_json);
+  // Filtered rather than trusted: the marker is free-form JSON on a row that
+  // may have been written by an older version of this code, and a value that
+  // is not a real dimension must not silently zero one that is.
+  const unmeasuredInBaseline = (
+    storedMarker.success ? storedMarker.data.unmeasuredDimensions : []
+  ).filter(isMetricDimension);
+  const incomparable = new Set<MetricDimension>([...unmeasuredNow, ...unmeasuredInBaseline]);
+  const comparable = withIncomparableDimensionsZeroed(scaled, incomparable);
+
+  const dataConfidence = weakestConfidence([
+    ...revenueRows.map((row) => row.data_confidence),
+    ...socialRows.map((row) => row.data_confidence),
+  ]);
 
   const report = generateDailyReport({
     creatorId: input.creatorId,
@@ -240,6 +355,9 @@ export async function produceDailyCreatorReport(input: {
     baseline: comparable,
     healthBand: healthBand(creator.data.current_health_score),
     contentBufferDays: creator.data.current_content_buffer_days,
+    // Across BOTH tables: a recommendation drawing on either cannot claim
+    // more confidence than the weakest row behind it.
+    dataConfidence,
   });
 
   const { data, error } = await client
@@ -269,6 +387,16 @@ export async function produceDailyCreatorReport(input: {
           currentWindowDays: CURRENT_WINDOW_DAYS,
           baselineWindowDays: baselineDays,
           baselineScaledToWindow: baselineDays !== null,
+          /**
+           * Which dimensions this report did NOT compare, and why. Without
+           * this the report shows a percentage for some dimensions and
+           * nothing for others with no way to tell an unmeasured dimension
+           * from one that genuinely did not move.
+           */
+          unmeasuredThisWindow: unmeasuredNow,
+          unmeasuredInBaseline,
+          incomparableDimensions: [...incomparable],
+          dataConfidence,
         },
         provider: "RULES",
       },

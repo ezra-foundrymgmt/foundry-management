@@ -194,6 +194,8 @@ const sarahBaseline: MetricPoint = {
   revenue: 1020,
 };
 
+// Demo fixtures. These are presented as measured within the demo narrative,
+// and DemoStrip already tells the viewer the whole dataset is not real.
 export const reports = [
   generateDailyReport({
     creatorId: "madison",
@@ -202,6 +204,7 @@ export const reports = [
     baseline: madisonBaseline,
     healthBand: "WATCH",
     contentBufferDays: 8,
+    dataConfidence: "MEASURED",
   }),
   generateDailyReport({
     creatorId: "ava",
@@ -210,6 +213,7 @@ export const reports = [
     baseline: avaBaseline,
     healthBand: "GREEN",
     contentBufferDays: 19,
+    dataConfidence: "MEASURED",
   }),
   generateDailyReport({
     creatorId: "sarah",
@@ -218,6 +222,7 @@ export const reports = [
     baseline: sarahBaseline,
     healthBand: "AT_RISK",
     contentBufferDays: 5,
+    dataConfidence: "MEASURED",
   }),
 ];
 

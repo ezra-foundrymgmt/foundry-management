@@ -111,6 +111,7 @@ describe("RevenueDiagnosticService", () => {
       reportDate: "2026-09-02",
       healthBand: "WATCH",
       contentBufferDays: 8,
+      dataConfidence: "MEASURED",
       current: {
         date: "2026-09-02",
         reach: 186400,
@@ -175,5 +176,92 @@ describe("PnlService", () => {
       otherDirectCost: 0,
     });
     expect(result.contributionMargin).toBeNull();
+  });
+});
+
+/**
+ * A recommendation becomes a real assigned task in one click, so the
+ * confidence it carries is a claim about work the team will actually do.
+ * Every metric-derived recommendation used to be stamped MEASURED regardless
+ * of the provenance of the figures behind it — so a number an operator typed
+ * as an estimate produced a HIGH-priority task asserting it had been measured.
+ */
+describe("recommendation confidence reflects the data behind it", () => {
+  function reportWith(dataConfidence: "MEASURED" | "ESTIMATED" | "UNKNOWN") {
+    return generateDailyReport({
+      creatorId: "madison",
+      reportDate: "2026-09-02",
+      healthBand: "WATCH",
+      contentBufferDays: 8,
+      dataConfidence,
+      // Reach far below baseline and over the 1000 floor: fires the growth rule.
+      current: {
+        date: "2026-09-02",
+        reach: 4000,
+        profileVisits: 200,
+        outboundClicks: 40,
+        newSubscribers: 10,
+        firstBuyers: 3,
+        revenue: 900,
+      },
+      baseline: {
+        date: "2026-08-02",
+        reach: 10_000,
+        profileVisits: 500,
+        outboundClicks: 100,
+        newSubscribers: 12,
+        firstBuyers: 4,
+        revenue: 1000,
+      },
+    });
+  }
+
+  it("does not claim MEASURED for a recommendation built on estimated figures", () => {
+    const metricDerived = reportWith("ESTIMATED").recommendations.filter(
+      (recommendation) => recommendation.id !== "madison-rec-buffer",
+    );
+    expect(metricDerived.length).toBeGreaterThan(0);
+    for (const recommendation of metricDerived)
+      expect(recommendation.confidence, recommendation.id).toBe("ESTIMATED");
+  });
+
+  it("passes MEASURED through when the data really was measured", () => {
+    const metricDerived = reportWith("MEASURED").recommendations.filter(
+      (recommendation) => recommendation.id !== "madison-rec-buffer",
+    );
+    expect(metricDerived.length).toBeGreaterThan(0);
+    for (const recommendation of metricDerived)
+      expect(recommendation.confidence, recommendation.id).toBe("MEASURED");
+  });
+
+  it("never claims measurement for the content-buffer rule, which has no provenance", () => {
+    // creators.current_content_buffer_days carries no import record at all, so
+    // it inherits neither the metrics confidence nor a MEASURED stamp.
+    const buffer = generateDailyReport({
+      creatorId: "madison",
+      reportDate: "2026-09-02",
+      healthBand: "WATCH",
+      contentBufferDays: 3,
+      dataConfidence: "MEASURED",
+      current: {
+        date: "2026-09-02",
+        reach: 1,
+        profileVisits: 1,
+        outboundClicks: 1,
+        newSubscribers: 1,
+        firstBuyers: 1,
+        revenue: 1,
+      },
+      baseline: {
+        date: "2026-08-02",
+        reach: 1,
+        profileVisits: 1,
+        outboundClicks: 1,
+        newSubscribers: 1,
+        firstBuyers: 1,
+        revenue: 1,
+      },
+    }).recommendations.find((recommendation) => recommendation.id === "madison-rec-buffer");
+    expect(buffer?.confidence).toBe("UNKNOWN");
   });
 });

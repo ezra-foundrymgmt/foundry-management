@@ -166,7 +166,20 @@ export async function freezeBaseline(
       period_end: input.periodEnd,
       baseline_type: input.baselineType,
       version,
-      metrics_json: metrics,
+      /**
+       * The measurement provenance travels WITH the numbers, not just back to
+       * the caller.
+       *
+       * `unmeasuredDimensions` was computed here and returned in the response,
+       * where it was read once and discarded. What got frozen was
+       * `{ reach: 0, ... }` with nothing recording that the 0 is an absence
+       * rather than a measurement -- and a baseline is permanent, so every
+       * future report inherited that ambiguity from the one artifact that
+       * could still have explained it. Storing it alongside is what lets a
+       * reader months from now tell a creator who got no reach from a creator
+       * whose reach was never ingested.
+       */
+      metrics_json: { ...metrics, unmeasuredDimensions },
       frozen_at: frozenAt,
       created_by: session.userId,
     })
