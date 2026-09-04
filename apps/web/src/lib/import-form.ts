@@ -18,16 +18,40 @@
  * same reason: a typo is not a measurement.
  */
 export function numberOrNull(value: string): number | null {
+  const normalised = normaliseNumeric(value);
+  if (normalised === null) return null;
+  const parsed = Number(normalised);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * Accepts a number the way the operator is actually reading it.
+ *
+ * Instagram and TikTok insights render counts with thousands separators —
+ * "12,400" is the literal string on the screen being transcribed. Rejecting it
+ * makes the primary workflow fight the operator, and the earlier behaviour was
+ * worse still: `Number("12,400")` is NaN, which became null, which is the wire
+ * value meaning "I did not measure this". A figure someone read off a screen
+ * was recorded as an absence.
+ *
+ * Only STRICT thousands grouping is stripped — `\d{1,3}(,\d{3})+`. That
+ * deliberately excludes "1,5", which is a decimal comma in most of Europe and
+ * would silently become 15. An ambiguous string stays unparseable and is
+ * refused, because guessing which convention someone meant is exactly the kind
+ * of invention this codebase refuses elsewhere.
+ *
+ * Returns null for a genuinely empty field, and the cleaned string otherwise.
+ */
+function normaliseNumeric(value: string): string | null {
   const trimmed = value.trim();
   if (trimmed === "") return null;
-  const parsed = Number(trimmed);
-  return Number.isFinite(parsed) ? parsed : null;
+  return /^\d{1,3}(,\d{3})+$/.test(trimmed) ? trimmed.replace(/,/g, "") : trimmed;
 }
 
 /** True when the operator typed something that is not a usable number. */
 export function isUnparseableNumber(value: string): boolean {
-  const trimmed = value.trim();
-  return trimmed !== "" && !Number.isFinite(Number(trimmed));
+  const normalised = normaliseNumeric(value);
+  return normalised !== null && !Number.isFinite(Number(normalised));
 }
 
 export interface ImportRowInput {

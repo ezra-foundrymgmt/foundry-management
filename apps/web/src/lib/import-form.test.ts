@@ -68,3 +68,27 @@ describe("a batch is refused before anything is converted", () => {
     expect(findImportProblem([row({ values: { reach: "500", likes: "" } })], "social")).toBeNull();
   });
 });
+
+describe("numbers as the operator actually reads them", () => {
+  it("accepts the thousands separators Instagram renders", () => {
+    // "12,400" is the literal string on the insights screen being transcribed.
+    expect(numberOrNull("12,400")).toBe(12_400);
+    expect(numberOrNull("1,234,567")).toBe(1_234_567);
+    expect(findImportProblem([row({ values: { reach: "12,400" } })], "social")).toBeNull();
+  });
+
+  it("refuses an ambiguous comma rather than guessing the convention", () => {
+    // "1,5" is a decimal comma in most of Europe. Silently reading it as 15
+    // would be the kind of invention this codebase refuses everywhere else.
+    expect(numberOrNull("1,5")).toBeNull();
+    expect(findImportProblem([row({ values: { reach: "1,5" } })], "social")).toBe(
+      "UNPARSEABLE_NUMBER",
+    );
+  });
+
+  it("still refuses a genuine typo", () => {
+    expect(findImportProblem([row({ values: { reach: "12o0" } })], "social")).toBe(
+      "UNPARSEABLE_NUMBER",
+    );
+  });
+});

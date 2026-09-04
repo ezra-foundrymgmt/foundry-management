@@ -260,3 +260,40 @@ describe("importCreatorSocialPosts", () => {
     expect(new SocialImportError("CREATOR_NOT_FOUND", 404).status).toBe(404);
   });
 });
+
+/**
+ * An import REPLACES the whole row, which is what keeps every figure on it
+ * attributable to the one `measured_at` beside them. The cost is that an
+ * operator correcting a single metric clears the ones they left blank — the
+ * right write, but it must not be a silent one.
+ */
+describe("clearing a previously-measured figure is reported, not silent", () => {
+  it("counts a measured value the operator left blank this time", async () => {
+    // The stored row has reach and likes; this reading measured only views.
+    rows = [{ reach: 5000, likes: 40, views: null }];
+    const result = await importCreatorSocialPosts(
+      session,
+      CREATOR,
+      importOf({ rows: [post({ reach: null, likes: null, views: 900 })] }),
+    );
+    expect(result.clearedMeasurements).toBe(2);
+  });
+
+  it("reports nothing cleared when the import measures everything again", async () => {
+    rows = [{ reach: 5000, likes: 40 }];
+    const result = await importCreatorSocialPosts(session, CREATOR, importOf());
+    expect(result.clearedMeasurements).toBe(0);
+  });
+
+  it("does not count a value that merely changed", async () => {
+    // A correction is ordinary; only measured -> unmeasured is worth warning
+    // about, because nothing on the resulting row shows a number used to exist.
+    rows = [{ reach: 100 }];
+    const result = await importCreatorSocialPosts(
+      session,
+      CREATOR,
+      importOf({ rows: [post({ reach: 9999 })] }),
+    );
+    expect(result.clearedMeasurements).toBe(0);
+  });
+});

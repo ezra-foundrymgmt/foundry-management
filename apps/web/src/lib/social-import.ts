@@ -91,6 +91,47 @@ export const socialImportSchema = z.object({
   rows: z.array(socialPostRowSchema).min(1).max(200),
 });
 
+/** The measurement columns an import owns, and therefore can clear. */
+const METRIC_COLUMNS = [
+  "views",
+  "reach",
+  "impressions",
+  "likes",
+  "comments",
+  "shares",
+  "saves",
+  "profile_visits",
+  "outbound_clicks",
+  "follows_generated",
+] as const;
+
+/** The same list as a select string; the client types .select() literally. */
+const METRIC_SELECT = METRIC_COLUMNS.join(",");
+
+/**
+ * How many previously-measured figures this import replaces with null.
+ *
+ * Counts only measured -> unmeasured transitions. A value being CHANGED is an
+ * ordinary correction and is not reported; a value being erased is what the
+ * operator needs to know about, because nothing on the resulting row will
+ * indicate that a number used to be there.
+ */
+function countClearedMeasurements(
+  before: ReadonlyArray<Record<string, number | null>>,
+  after: ReadonlyArray<Record<string, number | null>>,
+): number {
+  let cleared = 0;
+  for (const row of before) {
+    for (const column of METRIC_COLUMNS) {
+      if (row[column] === null || row[column] === undefined) continue;
+      // Every payload row carries every metric column, so a null here is a
+      // deliberate "not measured in this reading".
+      if (after.some((candidate) => candidate[column] === null)) cleared += 1;
+    }
+  }
+  return cleared;
+}
+
 /** A reason the caller is allowed to see. Routes return `message` verbatim. */
 export class SocialImportError extends Error {
   constructor(
@@ -180,6 +221,37 @@ export async function importCreatorSocialPosts(
     data_confidence: input.dataConfidence,
   }));
 
+  /**
+   * What this import is about to overwrite.
+   *
+   * One import is one complete reading of a post, so the upsert REPLACES the
+   * row rather than merging into it — that is what keeps every figure on a row
+   * attributable to the single `measured_at` beside them, instead of mixing
+   * today's reach with last week's likes under one timestamp.
+   *
+   * The cost is that an operator correcting one metric, and leaving the rest
+   * blank, clears measurements that were previously there. That is the right
+   * write, but it must not be a silent one, so the count is read first and
+   * returned to the caller to be shown.
+   */
+  const existing = await client
+    .from("social_posts")
+    .select(METRIC_SELECT)
+    .eq("organization_id", session.organizationId)
+    .eq("creator_id", creatorId)
+    .eq("platform", input.platform)
+    .in(
+      "external_post_id",
+      input.rows.map((row) => row.externalPostId),
+    );
+  // A failure here must not block the import; it only costs the warning.
+  const clearedMeasurements = existing.error
+    ? null
+    : countClearedMeasurements(
+        (existing.data ?? []) as unknown as Array<Record<string, number | null>>,
+        payload as unknown as Array<Record<string, number | null>>,
+      );
+
   const { data, error } = await client
     .from("social_posts")
     .upsert(payload, { onConflict: "creator_id,platform,external_post_id" })
@@ -222,5 +294,8 @@ export async function importCreatorSocialPosts(
     platform: input.platform,
     source: input.source,
     dataConfidence: input.dataConfidence,
+    // null when the pre-read failed: not zero, which would claim nothing was
+    // cleared when we simply do not know.
+    clearedMeasurements,
   };
 }

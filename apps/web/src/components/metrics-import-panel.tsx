@@ -221,7 +221,7 @@ export function MetricsImportPanel({
         body: JSON.stringify(body),
       });
       const payload = (await response.json().catch(() => ({}))) as {
-        data?: { rowsWritten: number };
+        data?: { rowsWritten: number; clearedMeasurements?: number | null };
         error?: string;
       };
 
@@ -232,7 +232,16 @@ export function MetricsImportPanel({
         );
         return;
       }
-      setOk(`Imported ${payload.data.rowsWritten} ${mode === "social" ? "posts" : "days"}.`);
+      // An import replaces the whole row, so metrics the operator left blank
+      // are cleared. Saying so is the difference between a deliberate
+      // replacement and silent data loss.
+      const cleared = payload.data.clearedMeasurements ?? 0;
+      setOk(
+        `Imported ${payload.data.rowsWritten} ${mode === "social" ? "posts" : "days"}.` +
+          (cleared > 0
+            ? ` ${cleared} previously-measured ${cleared === 1 ? "figure was" : "figures were"} cleared because the field was left blank.`
+            : ""),
+      );
       reset();
       startTransition(() => router.refresh());
     } catch {
