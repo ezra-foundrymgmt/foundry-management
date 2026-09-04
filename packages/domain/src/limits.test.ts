@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { MAX_FOLLOWER_ESTIMATE, clampFollowerEstimate } from "./limits";
-import { CONTRACT_STATUSES_SATISFYING_GATE, UNSET_TIMEZONE, hasRealTimezone } from "./types";
+import {
+  CONTRACT_STATUSES_SATISFYING_GATE,
+  FALLBACK_COMMISSION_RATE,
+  UNSET_TIMEZONE,
+  hasRealTimezone,
+  readCommissionRate,
+} from "./types";
 
 /**
  * The follower field accepted any number of digits while the server capped the
@@ -65,5 +71,35 @@ describe("gates that can actually fail", () => {
     // UTC is a legitimate answer when someone actually chose it; the defect was
     // the silent default, not the value.
     expect(hasRealTimezone("UTC")).toBe(true);
+  });
+});
+
+/**
+ * The commission rate is printed verbatim into a document a creator reads, so a
+ * malformed setting must not propagate. It lives at organisation level because
+ * Foundry charges everyone the same today, and a per-creator field with no
+ * default is what left the first real welcome package unable to state terms.
+ */
+describe("organisation commission rate", () => {
+  it("reads a configured rate", () => {
+    expect(readCommissionRate({ defaultCommissionRate: 0.3 })).toBe(0.3);
+    expect(readCommissionRate({ defaultCommissionRate: 0.42 })).toBe(0.42);
+  });
+
+  it("falls back when the organisation has not set one", () => {
+    expect(readCommissionRate({})).toBe(FALLBACK_COMMISSION_RATE);
+    expect(readCommissionRate(null)).toBe(FALLBACK_COMMISSION_RATE);
+    expect(readCommissionRate(undefined)).toBe(FALLBACK_COMMISSION_RATE);
+  });
+
+  it("refuses a rate that would misstate the arrangement to a creator", () => {
+    // 0 would tell her Foundry takes nothing; >= 1 would claim more than she earns.
+    expect(readCommissionRate({ defaultCommissionRate: 0 })).toBe(FALLBACK_COMMISSION_RATE);
+    expect(readCommissionRate({ defaultCommissionRate: 1 })).toBe(FALLBACK_COMMISSION_RATE);
+    expect(readCommissionRate({ defaultCommissionRate: 1.5 })).toBe(FALLBACK_COMMISSION_RATE);
+    expect(readCommissionRate({ defaultCommissionRate: -0.2 })).toBe(FALLBACK_COMMISSION_RATE);
+    expect(readCommissionRate({ defaultCommissionRate: "thirty percent" })).toBe(
+      FALLBACK_COMMISSION_RATE,
+    );
   });
 });

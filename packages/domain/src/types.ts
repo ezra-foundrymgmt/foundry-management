@@ -141,6 +141,42 @@ export type ContractStatus = (typeof CONTRACT_STATUSES)[number];
 export const CONTRACT_STATUSES_SATISFYING_GATE: readonly ContractStatus[] = ["SIGNED", "ACTIVE"];
 
 /**
+ * Where the commission rate comes from.
+ *
+ * One organisation-level default rather than a value typed per creator. Foundry
+ * charges every creator the same rate today, and a per-creator field with no
+ * default is what left the first welcome package unable to state the commercial
+ * terms: activation initialises a P&L period, nothing supplies a rate, and the
+ * package correctly refused to invent one.
+ *
+ * Stored in `organizations.settings_json` under this key, so changing it is one
+ * write rather than a migration. A creator who genuinely negotiates a different
+ * rate can still have `creator_pnl_periods.commission_rate` set for their own
+ * periods — the per-creator value always wins over this default.
+ */
+export const ORGANIZATION_COMMISSION_RATE_KEY = "defaultCommissionRate";
+
+/** Used when the organisation has not set one. */
+export const FALLBACK_COMMISSION_RATE = 0.3;
+
+/**
+ * Reads the organisation's default commission rate from its settings blob.
+ *
+ * Refuses anything outside (0, 1). A rate of 0 would tell a creator Foundry
+ * takes nothing and a rate above 1 would claim more than they earn — both get
+ * printed verbatim into a welcome package, so a malformed setting falls back to
+ * the known default rather than propagating into a document a creator reads.
+ */
+export function readCommissionRate(settings: unknown): number {
+  const value =
+    typeof settings === "object" && settings !== null
+      ? (settings as Record<string, unknown>)[ORGANIZATION_COMMISSION_RATE_KEY]
+      : undefined;
+  const rate = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(rate) && rate > 0 && rate < 1 ? rate : FALLBACK_COMMISSION_RATE;
+}
+
+/**
  * Stands in for a timezone nobody has supplied.
  *
  * `creators.timezone` is NOT NULL and the conversion defaulted it to 'UTC',

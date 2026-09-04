@@ -2,6 +2,7 @@ import "server-only";
 import { z } from "zod";
 import {
   composeWelcomePackage,
+  readCommissionRate,
   renderWelcomePackage,
   type WelcomePackage,
   type WorkDepartment,
@@ -154,6 +155,17 @@ export class SupabaseActivationRecordPort implements ActivationRecordPort {
     );
   }
 
+  /**
+   * Opens the creator's first P&L period, carrying the organisation's default
+   * commission rate onto it.
+   *
+   * The rate used to be left null here, which is why the first real welcome
+   * package could not state the commercial terms: nothing in activation ever
+   * supplied one, and the package correctly refused to invent it. Reading the
+   * organisation default means a creator on standard terms is complete from
+   * the moment they are activated, while a negotiated rate can still be written
+   * onto this row afterwards.
+   */
   async initializePnl(creator: OnboardingCreator): Promise<void> {
     const start = this.#today();
     const end = new Date(Date.now() + 29 * 86_400_000).toISOString().slice(0, 10);
@@ -164,10 +176,27 @@ export class SupabaseActivationRecordPort implements ActivationRecordPort {
         period_start: start,
         period_end: end,
         status: "OPEN",
+        commission_rate: await this.#commissionRate(),
         updated_at: new Date().toISOString(),
       },
       "creator_id,period_start,period_end",
     );
+  }
+
+  /**
+   * The organisation's standard commission rate.
+   *
+   * Falls back rather than throwing: a missing or malformed setting must not
+   * strand a creator mid-activation, and readCommissionRate already refuses
+   * anything outside (0, 1).
+   */
+  async #commissionRate(): Promise<number> {
+    const { data } = await this.#admin()
+      .from("organizations")
+      .select("settings_json")
+      .eq("id", this.organizationId)
+      .maybeSingle();
+    return readCommissionRate((data as { settings_json?: unknown } | null)?.settings_json);
   }
 
   async initializeContentInventory(creator: OnboardingCreator): Promise<void> {

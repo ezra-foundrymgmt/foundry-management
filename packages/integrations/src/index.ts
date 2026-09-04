@@ -131,7 +131,12 @@ interface SlackUserInfoResponse {
 interface SlackResponse {
   ok: boolean;
   error?: string;
-  channel?: { id?: string; name?: string; is_private?: boolean };
+  channel?: {
+    id?: string;
+    name?: string;
+    is_private?: boolean;
+    purpose?: { value?: string };
+  };
   channels?: Array<{ id?: string; name?: string }>;
   response_metadata?: { next_cursor?: string };
 }
@@ -152,20 +157,52 @@ export class LiveSlackProvider implements SlackProvider {
   }): Promise<ProvisionedResource> {
     const existing = await this.store.find(input.idempotencyKey);
     if (existing) return existing;
-    const name = composeChannelName(
-      input.audience === "creator" ? "creator" : "internal",
-      input.stageSlug,
-      input.creatorId,
-    );
-    const created = await this.#call("conversations.create", { name, is_private: true });
+
+    const marker = provisioningMarker(input.idempotencyKey);
+    const preferred = composePreferredChannelName(input.audience, input.stageSlug);
+    const disambiguated = composeChannelName(input.audience, input.stageSlug, input.creatorId);
+
+    let name = preferred;
+    let created = await this.#call("conversations.create", { name, is_private: true });
     let externalId = created.channel?.id;
-    if (!created.ok && created.error === "name_taken") externalId = await this.#findChannel(name);
+
+    if (!created.ok && created.error === "name_taken") {
+      /**
+       * Something already holds the short name. It is either THIS creator's
+       * channel from an interrupted run, or a different creator who happens to
+       * share a first name.
+       *
+       * The difference matters enormously: adopting a namesake's channel would
+       * put one creator inside another's private room, and for the internal
+       * variant that room contains candid notes about the person being added.
+       * So adoption requires proof of ownership — the provisioning marker this
+       * code writes into the channel purpose — and anything unproven falls
+       * through to the disambiguated name instead.
+       */
+      const owned = await this.#findOwnedChannel(preferred, marker);
+      if (owned) {
+        externalId = owned;
+      } else {
+        name = disambiguated;
+        created = await this.#call("conversations.create", { name, is_private: true });
+        externalId = created.channel?.id;
+        // The disambiguated name embeds a hash of this creator's id, so a
+        // collision here really is this creator's own channel.
+        if (!created.ok && created.error === "name_taken")
+          externalId = await this.#findChannel(name);
+      }
+    }
+
     if (!externalId) throw new ProviderApiError("SLACK", created.error ?? "CREATE_FAILED");
-    // A name_taken reconcile recovers a channel this code did not create in this
-    // run. Adopting it blindly would bind a creator channel to whatever already
-    // held the name — including a public channel, which would publish creator
-    // material to the whole workspace.
+    // Any channel recovered rather than created in this run must still be
+    // private — adopting a public one would publish creator material to the
+    // whole workspace.
     if (!created.ok) await this.#assertPrivateChannel(externalId);
+    // Written after creation so a later run can prove this channel is ours.
+    // Best-effort: a workspace that refuses purpose changes should not fail an
+    // activation, it just loses the reconcile shortcut.
+    await this.#call("conversations.setPurpose", { channel: externalId, purpose: marker });
+
     const resource: ProvisionedResource = {
       externalId,
       name,
@@ -174,6 +211,21 @@ export class LiveSlackProvider implements SlackProvider {
     };
     await this.store.save(input.idempotencyKey, resource);
     return resource;
+  }
+
+  /**
+   * Finds a channel by name only if it carries this creator's provisioning
+   * marker.
+   *
+   * Returns undefined for a channel that exists but cannot be proven ours,
+   * which is what makes the short name safe to attempt.
+   */
+  async #findOwnedChannel(name: string, marker: string): Promise<string | undefined> {
+    const candidate = await this.#findChannel(name);
+    if (!candidate) return undefined;
+    const info = await this.#call("conversations.info", { channel: candidate });
+    if (!info.ok) return undefined;
+    return info.channel?.purpose?.value === marker ? candidate : undefined;
   }
 
   async inviteMembers(resourceId: string, memberIds: string[]): Promise<void> {
@@ -467,6 +519,33 @@ export function composeChannelName(
   if (!name.endsWith(discriminator))
     throw new ProviderApiError("SLACK", "CHANNEL_NAME_DISCRIMINATOR_LOST", name);
   return name;
+}
+
+/** The suffix that tells the two channels apart, by audience. */
+const AUDIENCE_SUFFIX = { creator: "creator", internal: "priv" } as const;
+
+/**
+ * The short, readable channel name an operator actually wants to see —
+ * `sarah-creator`, `sarah-priv`.
+ *
+ * Uses the creator's FIRST name only. A channel list is scanned by a human
+ * dozens of times a day and `creator-sarah-parks-9a490b84` reads as noise; the
+ * discriminator earns its place only when something actually collides.
+ *
+ * That collision risk is real and is handled by the caller, not here: two
+ * creators named Sarah both want `sarah-creator`, and silently binding the
+ * second to the first's channel would put one creator inside another's private
+ * room. `composeChannelName` above remains the disambiguated form, used the
+ * moment this preferred name is taken by a channel this creator does not own.
+ */
+export function composePreferredChannelName(
+  audience: "creator" | "internal",
+  stageSlug: string,
+): string {
+  const first = normalizeSlackChannel(stageSlug).split("-").filter(Boolean)[0] ?? "creator";
+  const suffix = AUDIENCE_SUFFIX[audience];
+  const budget = SLACK_CHANNEL_NAME_LIMIT - suffix.length - 1;
+  return normalizeSlackChannel(`${first.slice(0, Math.max(budget, 1))}-${suffix}`);
 }
 
 function richText(content: string) {

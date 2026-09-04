@@ -5,6 +5,7 @@ import {
   lookupNotionPage,
   lookupSlackUser,
   composeChannelName,
+  composePreferredChannelName,
   MockSlackProvider,
   OnlyFansProviderPlaceholder,
   provisioningMarker,
@@ -69,36 +70,128 @@ describe("live provider adapters", () => {
       idempotencyKey: "slack:1",
     };
     expect((await provider.createChannel(input)).externalId).toBe("C123");
+    const afterFirst = calls;
+    expect(afterFirst).toBeGreaterThan(0);
+    // The subject is that a repeat call is served from the store. Asserting a
+    // fixed total instead made this fail the moment creation gained a second
+    // API call, which told us nothing about the registry.
     expect((await provider.createChannel(input)).externalId).toBe("C123");
-    expect(calls).toBe(1);
+    expect(calls).toBe(afterFirst);
   });
 
-  it("distinguishes two creators that share a stage name", async () => {
-    // Without a discriminator both creators generate the same channel name and
-    // the name_taken reconcile binds the second creator to the first's channel.
-    const names: string[] = [];
-    const request: typeof fetch = (_url, init) => {
+  /**
+   * A fake workspace with the one property that matters: channel names are
+   * unique, so a second creator asking for a name that exists gets name_taken
+   * and must resolve it. The previous fake answered ok to everything, so it
+   * never reached the branch that actually prevents the collision.
+   */
+  function fakeSlackWorkspace() {
+    const channels = new Map<string, { id: string; purpose: string }>();
+    const attempted: string[] = [];
+    let next = 0;
+    const request: typeof fetch = (url, init) => {
+      // fetch's first argument may be a Request, whose default stringification
+      // is "[object Object]" — extract the href for each shape instead.
+      const href = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+      const method = href.split("/api/")[1] ?? "";
       const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
         name?: string;
+        channel?: string;
+        purpose?: string;
       };
-      if (body.name) names.push(body.name);
-      return Promise.resolve(new Response(JSON.stringify({ ok: true, channel: { id: "C1" } })));
+      if (method === "conversations.create") {
+        attempted.push(body.name ?? "");
+        if (channels.has(body.name ?? ""))
+          return Promise.resolve(new Response(JSON.stringify({ ok: false, error: "name_taken" })));
+        const id = `C${(next += 1)}`;
+        channels.set(body.name ?? "", { id, purpose: "" });
+        return Promise.resolve(
+          new Response(JSON.stringify({ ok: true, channel: { id, name: body.name } })),
+        );
+      }
+      if (method === "conversations.setPurpose") {
+        for (const entry of channels.values())
+          if (entry.id === body.channel) entry.purpose = body.purpose ?? "";
+        return Promise.resolve(new Response(JSON.stringify({ ok: true })));
+      }
+      if (method === "conversations.list") {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              ok: true,
+              channels: [...channels.entries()].map(([name, v]) => ({ id: v.id, name })),
+            }),
+          ),
+        );
+      }
+      if (method === "conversations.info") {
+        const found = [...channels.values()].find((v) => v.id === body.channel);
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              ok: true,
+              channel: { id: body.channel, is_private: true, purpose: { value: found?.purpose } },
+            }),
+          ),
+        );
+      }
+      return Promise.resolve(new Response(JSON.stringify({ ok: true })));
     };
-    const provider = new LiveSlackProvider("token", new MemoryResourceStore(), request);
-    await provider.createChannel({
+    return { request, attempted, channels };
+  }
+
+  it("gives the first creator the short name and never binds a namesake to it", async () => {
+    const workspace = fakeSlackWorkspace();
+    const provider = new LiveSlackProvider(
+      "token",
+      new MemoryResourceStore(),
+      workspace.request,
+    );
+    const first = await provider.createChannel({
       creatorId: "aaaaaaaa-0000-4000-8000-00000000aaaa",
-      stageSlug: "madison",
-      audience: "creator",
+      stageSlug: "madison-carter",
+      audience: "creator" as const,
       idempotencyKey: "slack:a",
     });
-    await provider.createChannel({
+    const second = await provider.createChannel({
       creatorId: "bbbbbbbb-0000-4000-8000-00000000bbbb",
-      stageSlug: "madison",
-      audience: "creator",
+      stageSlug: "madison-jones",
+      audience: "creator" as const,
       idempotencyKey: "slack:b",
     });
-    expect(names).toHaveLength(2);
-    expect(names[0]).not.toBe(names[1]);
+
+    // The first Madison gets the readable name.
+    expect(first.name).toBe("madison-creator");
+    // The second asks for it, is refused, and falls to the disambiguated form
+    // rather than being bound to the first creator's private channel.
+    expect(workspace.attempted).toContain("madison-creator");
+    expect(second.name).not.toBe("madison-creator");
+    expect(second.externalId).not.toBe(first.externalId);
+  });
+
+  it("reclaims its OWN channel when a run is interrupted after creation", async () => {
+    // Same creator, same idempotency key, but the store lost the record. The
+    // provisioning marker is what proves the existing channel is ours, so this
+    // must adopt rather than create a second one.
+    const workspace = fakeSlackWorkspace();
+    const input = {
+      creatorId: "aaaaaaaa-0000-4000-8000-00000000aaaa",
+      stageSlug: "madison-carter",
+      audience: "creator" as const,
+      idempotencyKey: "slack:a",
+    };
+    const first = await new LiveSlackProvider(
+      "token",
+      new MemoryResourceStore(),
+      workspace.request,
+    ).createChannel(input);
+    const again = await new LiveSlackProvider(
+      "token",
+      new MemoryResourceStore(),
+      workspace.request,
+    ).createChannel(input);
+    expect(again.externalId).toBe(first.externalId);
+    expect(workspace.channels.size).toBe(1);
   });
 
   it("keeps the discriminator even for a stage name that blows the 80-char limit", () => {
@@ -513,5 +606,43 @@ describe("Notion page lookup", () => {
 
     expect(seenUrl).not.toContain("secret_token_value");
     expect(seenUrl).toContain(PAGE);
+  });
+});
+
+/**
+ * Channel names are scanned by a human dozens of times a day, so the short form
+ * is the default. The discriminator earns its place only on a real collision —
+ * and a collision is dangerous, not cosmetic: two creators named Sarah both
+ * want `sarah-creator`, and binding the second to the first would put one
+ * creator inside another's private room.
+ */
+describe("channel naming", () => {
+  it("uses the creator's first name and the audience", () => {
+    expect(composePreferredChannelName("creator", "sarah-parks")).toBe("sarah-creator");
+    expect(composePreferredChannelName("internal", "sarah-parks")).toBe("sarah-priv");
+  });
+
+  it("handles a single-word stage name", () => {
+    expect(composePreferredChannelName("creator", "nova")).toBe("nova-creator");
+  });
+
+  it("never produces an empty name", () => {
+    expect(composePreferredChannelName("creator", "")).toBe("creator-creator");
+    expect(composePreferredChannelName("internal", "---")).toBe("creator-priv");
+  });
+
+  it("keeps the disambiguated form available and distinct per creator", () => {
+    const a = composeChannelName("creator", "sarah-parks", "11111111-1111-4111-8111-111111111111");
+    const b = composeChannelName("creator", "sarah-parks", "22222222-2222-4222-8222-222222222222");
+    expect(a).not.toBe(b);
+    // Both start from the same slug, so only the discriminator separates them.
+    expect(a.startsWith("creator-sarah-parks-")).toBe(true);
+    expect(b.startsWith("creator-sarah-parks-")).toBe(true);
+  });
+
+  it("gives two same-first-name creators the SAME preferred name, which is why the caller must check ownership", () => {
+    expect(composePreferredChannelName("creator", "sarah-parks")).toBe(
+      composePreferredChannelName("creator", "sarah-jones"),
+    );
   });
 });
