@@ -223,6 +223,8 @@ export default async function CreatorPage({ params }: { params: Promise<{ creato
               updatedAt={creator.updatedAt}
               jurisdictionReviewStatus={creator.jurisdictionStatus}
               adultConfirmationStatus={creator.adultConfirmationStatus}
+              contractStatus={creator.contractStatus}
+              timezone={creator.timezone}
               assignedCreatorSuccessUserId={creator.assignedCreatorSuccessUserId}
               assignedGrowthUserId={creator.assignedGrowthUserId}
               team={team}

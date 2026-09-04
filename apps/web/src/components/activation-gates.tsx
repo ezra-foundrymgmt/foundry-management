@@ -7,6 +7,8 @@ import {
   BOUNDARY_SEVERITIES,
   BOUNDARY_TYPES,
   JURISDICTION_REVIEW_STATUSES,
+  CONTRACT_STATUSES,
+  hasRealTimezone,
 } from "@creatoros/domain";
 
 export interface TeamMember {
@@ -31,6 +33,8 @@ export function ActivationGates({
   updatedAt,
   jurisdictionReviewStatus,
   adultConfirmationStatus,
+  contractStatus,
+  timezone,
   assignedCreatorSuccessUserId,
   assignedGrowthUserId,
   team,
@@ -41,6 +45,8 @@ export function ActivationGates({
   updatedAt: string;
   jurisdictionReviewStatus: string | null;
   adultConfirmationStatus: string | null;
+  contractStatus: string | null;
+  timezone: string | null;
   assignedCreatorSuccessUserId: string | null;
   assignedGrowthUserId: string | null;
   team: TeamMember[];
@@ -96,6 +102,48 @@ export function ActivationGates({
       ) : null}
 
       <div style={{ display: "grid", gap: 14, marginTop: 14 }}>
+        <label style={{ display: "grid", gap: 4, fontSize: 11 }}>
+          <span className="eyebrow">CONTRACT</span>
+          <select
+            className="input"
+            value={contractStatus ?? "PENDING"}
+            disabled={busy !== null}
+            onChange={(event) =>
+              void send("contract", base, { contractStatus: event.target.value, updatedAt })
+            }
+          >
+            {CONTRACT_STATUSES.map((status) => (
+              <option key={status} value={status}>
+                {status}
+              </option>
+            ))}
+          </select>
+          <span style={{ fontSize: 9.5, color: "var(--ink-soft)" }}>
+            Only SIGNED or ACTIVE clears the activation gate. Move this when the
+            agreement is actually signed, not before.
+          </span>
+        </label>
+
+        <label style={{ display: "grid", gap: 4, fontSize: 11 }}>
+          <span className="eyebrow">CREATOR TIMEZONE</span>
+          <input
+            className="input"
+            defaultValue={hasRealTimezone(timezone) ? (timezone ?? "") : ""}
+            placeholder="America/Los_Angeles"
+            disabled={busy !== null}
+            onBlur={(event) => {
+              const value = event.target.value.trim();
+              if (value === "" || value === timezone) return;
+              void send("timezone", base, { timezone: value, updatedAt });
+            }}
+          />
+          <span style={{ fontSize: 9.5, color: "var(--ink-soft)" }}>
+            {hasRealTimezone(timezone)
+              ? "Their daily report is dated in this zone."
+              : "Not set. Reports fall back to UTC, which will be the wrong day for most creators."}
+          </span>
+        </label>
+
         <label style={{ display: "grid", gap: 4, fontSize: 11 }}>
           <span className="eyebrow">JURISDICTION REVIEW</span>
           <select

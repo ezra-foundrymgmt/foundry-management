@@ -13,6 +13,7 @@ import {
   type WorkflowRun,
 } from "@creatoros/workflows";
 import { z } from "zod";
+import { CONTRACT_STATUSES_SATISFYING_GATE, hasRealTimezone } from "@creatoros/domain";
 import { getIntegrationToken, SupabaseProviderResourceStore } from "@/lib/integration-registry";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { SupabaseActivationRecordPort } from "@/lib/activation-records";
@@ -113,7 +114,9 @@ export async function loadLiveOnboardingCreator(
       .replace(/(^-|-$)/g, ""),
     status:
       creator.status === "WATCH" || creator.status === "ACTIVE" ? creator.status : "ONBOARDING",
-    contractSigned: ["SIGNED", "ACTIVE"].includes(String(creator.contract_status).toUpperCase()),
+    contractSigned: (CONTRACT_STATUSES_SATISFYING_GATE as readonly string[]).includes(
+      String(creator.contract_status).toUpperCase(),
+    ),
     // Matches the allowlist in activation-readiness.ts, which already included
     // "PASSED" — the value seed.sql and every fixture actually use. This copy
     // did not, so no creator using the standard value could ever pass this
@@ -126,7 +129,10 @@ export async function loadLiveOnboardingCreator(
       String(creator.jurisdiction_review_status).toUpperCase(),
     ),
     contactEmail: creator.email,
-    timezone: creator.timezone,
+    // The sentinel is not an answer. Passing it through would satisfy the
+    // workflow's "timezone required" blocker, which is exactly the hole the
+    // 'UTC' default used to leave open.
+    timezone: hasRealTimezone(creator.timezone) ? creator.timezone : null,
     assignedTeam: Boolean(
       creator.assigned_creator_success_user_id || creator.assigned_growth_user_id,
     ),

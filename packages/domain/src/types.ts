@@ -114,6 +114,55 @@ export const ADULT_CONFIRMATION_STATUSES = ["NOT_STARTED", "CONFIRMED", "REJECTE
 export type AdultConfirmationStatus = (typeof ADULT_CONFIRMATION_STATUSES)[number];
 
 /**
+ * Where a creator's management agreement actually stands.
+ *
+ * This vocabulary exists because the activation gate for "signed contract"
+ * could not fail: `convert_prospect_to_creator` inserted the literal 'SIGNED'
+ * for every creator at the moment of conversion, before any agreement existed.
+ * Both the pre-flight gate and the final readiness check looked for exactly
+ * that value, so the system asserted a signed contract on the strength of
+ * nothing having been checked.
+ *
+ * Only SIGNED and ACTIVE clear the gate. A new creator starts at PENDING and a
+ * human moves it, which is the whole point: the record should follow the
+ * paperwork rather than assume it.
+ */
+export const CONTRACT_STATUSES = [
+  "PENDING",
+  "SENT",
+  "SIGNED",
+  "ACTIVE",
+  "DECLINED",
+  "EXPIRED",
+] as const;
+export type ContractStatus = (typeof CONTRACT_STATUSES)[number];
+
+/** Contract states that satisfy the activation gate. */
+export const CONTRACT_STATUSES_SATISFYING_GATE: readonly ContractStatus[] = ["SIGNED", "ACTIVE"];
+
+/**
+ * Stands in for a timezone nobody has supplied.
+ *
+ * `creators.timezone` is NOT NULL and the conversion defaulted it to 'UTC',
+ * which made the timezone gate unfailable and silently told the rest of the
+ * system that every creator lives in UTC. That is not harmless: the report
+ * scheduler dates each creator's report in their own timezone, and the revenue
+ * planner measures elapsed days the same way, so a real Los Angeles creator was
+ * being reported on an eight-hour-shifted day boundary.
+ *
+ * A sentinel rather than a real zone, so the gap is visible. It is deliberately
+ * not a valid IANA name: `reportDateFor` already falls back to UTC for anything
+ * it cannot parse, so behaviour degrades exactly as before while the gate can
+ * finally see that nobody has said where the creator is.
+ */
+export const UNSET_TIMEZONE = "UNSET";
+
+/** True when a stored timezone is a real answer rather than a placeholder. */
+export function hasRealTimezone(timezone: string | null | undefined): boolean {
+  return typeof timezone === "string" && timezone.trim() !== "" && timezone !== UNSET_TIMEZONE;
+}
+
+/**
  * Creator boundaries — what a creator will and will not do.
  *
  * HARD is never, under any circumstance. SOFT is case-by-case and is the only

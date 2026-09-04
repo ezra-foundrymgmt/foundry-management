@@ -1,5 +1,6 @@
 import "server-only";
 import { z } from "zod";
+import { CONTRACT_STATUSES_SATISFYING_GATE, hasRealTimezone } from "@creatoros/domain";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 /**
@@ -197,7 +198,7 @@ export async function evaluateActivationReadiness(input: {
       "contract-signed",
       "Signed contract",
       "BLOCKED",
-      present(row.contract_status, ["SIGNED", "ACTIVE"]),
+      present(row.contract_status, [...CONTRACT_STATUSES_SATISFYING_GATE]),
       `contract_status is ${row.contract_status ?? "not set"}`,
     ),
     check(
@@ -225,7 +226,10 @@ export async function evaluateActivationReadiness(input: {
       "timezone",
       "Creator timezone",
       "BLOCKED",
-      row.timezone !== null && row.timezone.length > 0,
+      // hasRealTimezone, not a length check: conversion stores the 'UNSET'
+      // sentinel when nobody supplied one, and a length check reads that as an
+      // answer.
+      hasRealTimezone(row.timezone),
       row.timezone ?? "no timezone recorded, so reports cannot target the creator's day",
     ),
     check(

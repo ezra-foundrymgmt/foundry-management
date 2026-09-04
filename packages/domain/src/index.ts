@@ -8,3 +8,4 @@ export * from "./revenue-diagnostic";
 export * from "./revenue-plan";
 export * from "./seed";
 export * from "./types";
+export * from "./welcome-package";

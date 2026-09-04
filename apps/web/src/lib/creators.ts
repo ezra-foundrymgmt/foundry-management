@@ -4,6 +4,7 @@ import {
   ADULT_CONFIRMATION_STATUSES,
   JURISDICTION_REVIEW_STATUSES,
   WORK_PRIORITIES,
+  CONTRACT_STATUSES,
 } from "@creatoros/domain";
 import type { AppSession } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -21,11 +22,44 @@ export const creatorComplianceSchema = z
   .object({
     jurisdictionReviewStatus: z.enum(JURISDICTION_REVIEW_STATUSES).optional(),
     adultConfirmationStatus: z.enum(ADULT_CONFIRMATION_STATUSES).optional(),
+    /**
+     * Where the management agreement actually stands.
+     *
+     * Previously unwritable anywhere in the product, while
+     * convert_prospect_to_creator asserted 'SIGNED' for every creator at the
+     * moment of conversion -- so the activation gate that checks it could not
+     * fail. It is a human judgement about paperwork and belongs beside the
+     * other two compliance judgements.
+     */
+    contractStatus: z.enum(CONTRACT_STATUSES).optional(),
+    /**
+     * IANA zone, e.g. America/Los_Angeles. Validated against the runtime's own
+     * timezone database rather than a hand-kept list, because a zone this
+     * accepts but Intl cannot resolve would silently fall back to UTC and
+     * reintroduce exactly the defect this field exists to close.
+     */
+    timezone: z
+      .string()
+      .trim()
+      .min(1)
+      .max(64)
+      .refine((value) => {
+        try {
+          new Intl.DateTimeFormat("en-CA", { timeZone: value });
+          return true;
+        } catch {
+          return false;
+        }
+      }, "UNKNOWN_TIMEZONE")
+      .optional(),
     updatedAt: z.string().datetime({ offset: true }),
   })
   .refine(
     (value) =>
-      value.jurisdictionReviewStatus !== undefined || value.adultConfirmationStatus !== undefined,
+      value.jurisdictionReviewStatus !== undefined ||
+      value.adultConfirmationStatus !== undefined ||
+      value.contractStatus !== undefined ||
+      value.timezone !== undefined,
     { message: "NO_COMPLIANCE_FIELDS_TO_UPDATE" },
   );
 
@@ -247,6 +281,8 @@ export async function updateCreatorCompliance(
     patch["jurisdiction_review_status"] = input.jurisdictionReviewStatus;
   if (input.adultConfirmationStatus !== undefined)
     patch["adult_confirmation_status"] = input.adultConfirmationStatus;
+  if (input.contractStatus !== undefined) patch["contract_status"] = input.contractStatus;
+  if (input.timezone !== undefined) patch["timezone"] = input.timezone;
 
   const result = await patchCreator(session, creatorId, input, patch, {
     action: "creator.compliance.recorded",
