@@ -13,6 +13,7 @@ import type { AppSession } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logEvent } from "@/lib/observability";
 import { preferOneRowPerPeriod } from "@/lib/metric-rows";
+import { reportDateFor } from "@/lib/report-scheduler";
 
 /**
  * Assembles a revenue plan from the creator's own measured history.
@@ -70,6 +71,32 @@ function daysBetween(start: string, end: string): number {
   return Math.round((Date.parse(end) - Date.parse(start)) / 86_400_000) + 1;
 }
 
+/**
+ * Days of the period that are actually FINISHED.
+ *
+ * `daysBetween` is inclusive, which is right for the period's length — 1 to 30
+ * September is genuinely 30 days — and wrong for elapsed time, because it bills
+ * the day in progress as fully spent. That single +1 produced two visible
+ * lies at opposite ends of the period:
+ *
+ *   - On the last day, elapsedDays equalled periodDays, so `paceAgainstGoal`
+ *     saw remainingDays 0, returned PERIOD_COMPLETE_MISSED and a null run rate,
+ *     and the panel printed "The period is over." while a full selling day
+ *     remained — suppressing the one number that day actually needs.
+ *   - On the first morning, a creator dead on pace was already reported BEHIND,
+ *     because a whole day's target was expected before a day had passed.
+ *
+ * `paceAgainstGoal` documents this parameter as completed days: its own test
+ * passes elapsedDays === periodDays to mean the period has ended. The caller
+ * was feeding it a count that included the unfinished day.
+ */
+function completedDays(periodStart: string, periodEnd: string, today: string): number {
+  if (today < periodStart) return 0;
+  // Past the end, every day of the period is finished.
+  if (today > periodEnd) return daysBetween(periodStart, periodEnd);
+  return Math.max(0, daysBetween(periodStart, today) - 1);
+}
+
 export interface CreatorRevenuePlan {
   creatorId: string;
   baselineVersion: number;
@@ -105,12 +132,13 @@ export async function buildCreatorRevenuePlan(
 
   const creator = await client
     .from("creators")
-    .select("id")
+    .select("id,timezone")
     .eq("organization_id", session.organizationId)
     .eq("id", creatorId)
     .maybeSingle();
   if (creator.error) throw databaseFailure("creator-lookup", creator.error);
   if (!creator.data) throw new PlannerError("CREATOR_NOT_FOUND", 404);
+  const creatorRow = creator.data as { timezone?: string | null };
 
   /**
    * The latest baseline OF ONE TYPE.
@@ -197,9 +225,16 @@ export async function buildCreatorRevenuePlan(
   };
 
   const periodDays = daysBetween(input.periodStart, input.periodEnd);
-  const today = new Date().toISOString().slice(0, 10);
-  const elapsedDays =
-    today < input.periodStart ? 0 : daysBetween(input.periodStart, today > input.periodEnd ? input.periodEnd : today);
+  /**
+   * The creator's own date, not the server's.
+   *
+   * A UTC date rolls over at 8pm Eastern, so an operator checking pace on the
+   * evening of the 29th would have been told the period ended — a day early,
+   * on top of the off-by-one below. `reportDateFor` is the same helper the
+   * report scheduler uses to date each creator's report in their timezone.
+   */
+  const today = reportDateFor(new Date(), creatorRow.timezone ?? null);
+  const elapsedDays = completedDays(input.periodStart, input.periodEnd, today);
 
   return {
     creatorId,

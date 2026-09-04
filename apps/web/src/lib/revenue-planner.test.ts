@@ -219,14 +219,56 @@ describe("achieved revenue and pacing", () => {
     expect(result.achievedFrom.rows).toBe(1);
   });
 
-  it("counts elapsed days from the period start to today, inclusive", async () => {
-    // Clock is 2026-09-10; the period began 2026-09-01. That is 10 days of 30.
+  it("counts only the days that have actually finished", async () => {
+    // Clock is 2026-09-10 and the period began 2026-09-01, so nine days are
+    // complete and the tenth is in progress. Counting the day in progress was
+    // the off-by-one that made a creator dead on pace read BEHIND.
     seed();
     const result = await buildCreatorRevenuePlan(session, CREATOR, {
       ...request,
       baselineType: "ROLLING_30D",
     });
-    expect(result.pace.elapsedFraction).toBeCloseTo(10 / 30, 5);
+    expect(result.pace.elapsedFraction).toBeCloseTo(9 / 30, 5);
+  });
+
+  it("does not declare the period over on its final day", async () => {
+    // The regression: elapsedDays equalled periodDays on the last day, so pace
+    // returned PERIOD_COMPLETE_MISSED and a null run rate, and the panel
+    // printed "The period is over." while a full selling day remained --
+    // suppressing the only actionable number that day has.
+    vi.setSystemTime(new Date("2026-09-30T08:00:00Z"));
+    seed({
+      achieved: [
+        {
+          date: "2026-09-05",
+          platform: "ONLYFANS",
+          imported_at: "2026-09-06T00:00:00+00:00",
+          data_confidence: "MEASURED",
+          creator_platform_receipts: 20_000,
+        },
+      ],
+    });
+    const result = await buildCreatorRevenuePlan(session, CREATOR, {
+      ...request,
+      // $30k target against $20k achieved: a real shortfall, not a met target.
+      targetRevenue: 30_000,
+      baselineType: "ROLLING_30D",
+    });
+    expect(result.pace.status).not.toBe("PERIOD_COMPLETE_MISSED");
+    // One day remains, and it has to deliver the whole $10,000 shortfall.
+    expect(result.pace.requiredDailyRunRate).toBe(10_000);
+  });
+
+  it("does not report a creator exactly on pace as behind on day one", async () => {
+    // Nothing has been earned because no day has finished, so nothing is owed.
+    vi.setSystemTime(new Date("2026-09-01T08:00:00Z"));
+    seed({ achieved: [] });
+    const result = await buildCreatorRevenuePlan(session, CREATOR, {
+      ...request,
+      baselineType: "ROLLING_30D",
+    });
+    expect(result.pace.expectedByNow).toBe(0);
+    expect(result.pace.status).toBe("ON_TRACK");
   });
 
   it("treats a period entirely in the future as not yet started", async () => {
