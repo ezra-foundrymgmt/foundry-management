@@ -30,7 +30,6 @@ const BLOCKED_REASONS: Record<string, string> = {
 
 const MESSAGES: Record<string, string> = {
   NO_BASELINE_FROZEN: "Freeze a baseline first. A plan needs measured conversion rates.",
-  PLANNER_DATABASE_FAILED: "The plan could not be built. Nothing changed.",
   CREATOR_NOT_FOUND: "That creator is not in this organization.",
   PERMISSION_DENIED: "Viewing plans requires analytics permissions.",
   AUTHENTICATION_REQUIRED: "Your session expired. Sign in again.",
