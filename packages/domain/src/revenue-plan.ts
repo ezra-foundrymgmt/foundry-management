@@ -29,8 +29,20 @@ export interface PlannedStage {
   stage: FunnelStage;
   /** How many of this thing the target implies. Null when unknowable. */
   required: number | null;
-  /** The measured conversion from this stage to the next, as a rate in (0,1]. */
+  /** The measured conversion from this stage to the next. See rateUnit. */
   conversionRate: number | null;
+  /**
+   * What conversionRate is expressed in.
+   *
+   * The last stage converts buyers to MONEY while every other stage converts
+   * one volume to another, so the field carries two different units. The panel
+   * used to infer which from magnitude (< 1 meant a percentage), which is
+   * wrong in both directions: a genuine rate above 1 -- more buyers than new
+   * subscribers in a period, which real data produces -- rendered as "1.25
+   * each" beside "100.00 each" dollars, and a buyer worth less than a dollar
+   * would have rendered as a percentage.
+   */
+  rateUnit: "RATIO" | "CURRENCY_PER_UNIT";
   confidence: DataConfidence;
   /** Present only when `required` is null: why the stage could not be planned. */
   blockedBy?: "RATE_NOT_MEASURED" | "RATE_IS_ZERO" | "UPSTREAM_UNKNOWN";
@@ -92,6 +104,27 @@ function rate(numerator: number, denominator: number, measured: boolean): Measur
    */
   if (denominator <= 0 || numerator <= 0) return { rate: null, because: "RATE_IS_ZERO" };
   return { rate: numerator / denominator };
+}
+
+/**
+ * Rounds a required volume up to whole units, without inventing one.
+ *
+ * You cannot acquire 0.4 of a subscriber, so a requirement rounds up. But
+ * `Math.ceil` on a raw IEEE-754 quotient rounds up a value that is only
+ * *representationally* above an integer: 490/700 is stored as
+ * 0.69999999999999995559, so 700 divided by it is 1000.0000000000001137 and
+ * ceil reports 1,001 subscribers where the exact answer is 1,000. A stray unit
+ * on a plan a founder is about to commit to is small, but it is wrong, and it
+ * is wrong in the direction that makes the plan look harder than it is.
+ *
+ * Snapping to the nearest integer first, when the value is within a relative
+ * hair of one, removes the artefact while leaving every genuine fraction to
+ * round up as it should.
+ */
+function requiredUnits(value: number): number {
+  const nearest = Math.round(value);
+  const tolerance = Math.max(1e-9, Math.abs(value) * 1e-12);
+  return Math.abs(value - nearest) < tolerance ? nearest : Math.ceil(value);
 }
 
 export interface PlanInput {
@@ -207,8 +240,9 @@ export function planRevenueTarget(input: PlanInput): RevenuePlan {
     if (stage === "firstBuyers") {
       stages.push({
         stage,
-        required: downstreamRequirement === null ? null : Math.ceil(downstreamRequirement),
+        required: downstreamRequirement === null ? null : requiredUnits(downstreamRequirement),
         conversionRate: effectiveRevenuePerBuyer.rate,
+        rateUnit: "CURRENCY_PER_UNIT" as const,
         confidence: effectiveRevenuePerBuyer.rate === null ? "UNKNOWN" : input.dataConfidence,
         // A creator with measured buyers who produced no revenue is a
         // different problem from one whose revenue was never ingested.
@@ -225,6 +259,7 @@ export function planRevenueTarget(input: PlanInput): RevenuePlan {
         stage,
         required: null,
         conversionRate: conversion.rate,
+        rateUnit: "RATIO" as const,
         confidence: "UNKNOWN",
         blockedBy: "UPSTREAM_UNKNOWN",
       });
@@ -236,6 +271,7 @@ export function planRevenueTarget(input: PlanInput): RevenuePlan {
         stage,
         required: null,
         conversionRate: null,
+        rateUnit: "RATIO" as const,
         confidence: "UNKNOWN",
         // The reason travels with the stage: RATE_IS_ZERO says the creator
         // converted nobody here, which no amount of extra input volume fixes.
@@ -249,8 +285,9 @@ export function planRevenueTarget(input: PlanInput): RevenuePlan {
     downstreamRequirement = (downstreamRequirement as number) / conversion.rate;
     stages.push({
       stage,
-      required: Math.ceil(downstreamRequirement),
+      required: requiredUnits(downstreamRequirement),
       conversionRate: conversion.rate,
+      rateUnit: "RATIO" as const,
       confidence: input.dataConfidence,
     });
   }

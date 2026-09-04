@@ -311,3 +311,56 @@ describe("a measured zero is distinguished from an absent measurement", () => {
     expect(plan.stages.find((s) => s.stage === "firstBuyers")?.required).toBe(100);
   });
 });
+
+/**
+ * Two ways the plan could show a wrong number while looking right.
+ */
+describe("the figures survive real, untidy data", () => {
+  it("does not add a phantom unit from floating-point division", () => {
+    // 490/700 stores as 0.69999999999999995559, so 700 / that is
+    // 1000.0000000000001 and Math.ceil reported 1,001 subscribers where the
+    // exact answer is 1,000. The fixture's tidy rates (0.01, 0.2, 0.1, 0.25)
+    // all land on the safe side and hid this.
+    const plan = planRevenueTarget({
+      targetRevenue: 70_000,
+      measured: {
+        date: "2026-08-31",
+        reach: 3_500_000,
+        profileVisits: 35_000,
+        outboundClicks: 7_000,
+        newSubscribers: 700,
+        firstBuyers: 490,
+        revenue: 49_000,
+      },
+      dataConfidence: "MEASURED",
+    });
+    expect(plan.stages.find((s) => s.stage === "newSubscribers")?.required).toBe(1_000);
+  });
+
+  it("still rounds a genuine fraction up, because units are whole", () => {
+    // 100 buyers at a 0.3 conversion needs 333.33 subscribers, i.e. 334.
+    const plan = planRevenueTarget({
+      targetRevenue: 10_000,
+      measured: { ...measured, newSubscribers: 100, firstBuyers: 30, revenue: 3_000 },
+      dataConfidence: "MEASURED",
+    });
+    // $3000/30 = $100 per buyer, so $10,000 needs 100 buyers at 30% => 334.
+    expect(plan.stages.find((s) => s.stage === "newSubscribers")?.required).toBe(334);
+  });
+
+  it("labels each rate with its own unit rather than leaving it to magnitude", () => {
+    // More buyers than new subscribers is real (buyers who subscribed earlier),
+    // giving a ratio above 1 that a magnitude heuristic renders as "1.25 each"
+    // directly beside "100.00 each" dollars, with nothing telling them apart.
+    const plan = planRevenueTarget({
+      targetRevenue: 10_000,
+      measured: { ...measured, newSubscribers: 40, firstBuyers: 50, revenue: 5_000 },
+      dataConfidence: "MEASURED",
+    });
+    const subs = plan.stages.find((s) => s.stage === "newSubscribers");
+    const buyers = plan.stages.find((s) => s.stage === "firstBuyers");
+    expect(subs?.conversionRate).toBeCloseTo(1.25, 5);
+    expect(subs?.rateUnit).toBe("RATIO");
+    expect(buyers?.rateUnit).toBe("CURRENCY_PER_UNIT");
+  });
+});

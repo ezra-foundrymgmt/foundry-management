@@ -44,6 +44,7 @@ interface Stage {
   stage: string;
   required: number | null;
   conversionRate: number | null;
+  rateUnit?: "RATIO" | "CURRENCY_PER_UNIT";
   confidence: string;
   blockedBy?: string;
 }
@@ -245,10 +246,9 @@ export function RevenuePlannerPanel({ creatorId }: { creatorId: string }) {
                     <span style={{ fontSize: 9.5, color: "var(--ink-soft)", width: 110 }}>
                       {stage.conversionRate === null
                         ? ""
-                        : `at ${(stage.conversionRate < 1
-                            ? stage.conversionRate * 100
-                            : stage.conversionRate
-                          ).toFixed(2)}${stage.conversionRate < 1 ? "%" : " each"}`}
+                        : stage.rateUnit === "CURRENCY_PER_UNIT"
+                          ? `at ${money.format(stage.conversionRate)} each`
+                          : `at ${(stage.conversionRate * 100).toFixed(2)}%`}
                     </span>
                   </>
                 )}
