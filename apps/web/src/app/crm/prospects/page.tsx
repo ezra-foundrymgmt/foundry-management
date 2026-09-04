@@ -1,4 +1,4 @@
-import { PIPELINE_STAGES, hasPermission, prospects } from "@creatoros/domain";
+import { hasPermission, prospects } from "@creatoros/domain";
 import { AccessDenied } from "@/components/access-denied";
 import { DemoStrip, PageHeader } from "@/components/page-header";
 import { ProspectBoard, type ProspectCard } from "@/components/prospect-board";
@@ -32,6 +32,12 @@ export default async function ProspectsPage() {
       }))
     : await getLiveProspects();
 
+  // prospect.read is not prospect.create: creator_success, analyst and viewer
+  // can all see this board and none of them may add to it. Showing them the
+  // form meant filling it in and getting PERMISSION_DENIED on save -- the
+  // check belongs where the button is drawn, not only where the POST lands.
+  const canCreate = !mock && hasPermission(access.session.role, "prospect.create");
+
   return (
     <main className="page">
       <DemoStrip />
@@ -39,7 +45,7 @@ export default async function ProspectsPage() {
         eyebrow="Acquisition CRM"
         title="Prospects"
         subtitle="Qualify opportunities with a consistent fit model and preserve every relationship touchpoint."
-        actions={mock ? null : <ProspectCreateForm />}
+        actions={canCreate ? <ProspectCreateForm /> : null}
       />
       <ProspectBoard
         prospects={records}

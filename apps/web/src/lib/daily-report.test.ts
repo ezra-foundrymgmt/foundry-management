@@ -13,10 +13,17 @@ interface TableResult {
 const tables = new Map<string, TableResult>();
 const writes: Array<{ table: string; payload: Record<string, unknown> }> = [];
 
+const bounds: Array<{ table: string; op: string; column: string; value: unknown }> = [];
+
 function makeQuery(table: string) {
   const chain: Record<string, unknown> = {};
   const result = () => Promise.resolve(tables.get(table) ?? { data: null, error: null });
-  for (const op of ["select", "eq", "gte", "order", "limit", "in", "is"]) chain[op] = () => chain;
+  for (const op of ["select", "eq", "order", "limit", "in", "is"]) chain[op] = () => chain;
+  for (const op of ["gte", "lte", "lt"])
+    chain[op] = (column: string, value: unknown) => {
+      bounds.push({ table, op, column, value });
+      return chain;
+    };
   chain["upsert"] = (payload: Record<string, unknown>) => {
     writes.push({ table, payload });
     return chain;
@@ -49,6 +56,7 @@ const baselineMetrics = {
 beforeEach(() => {
   tables.clear();
   writes.length = 0;
+  bounds.length = 0;
   tables.set("creators", {
     data: {
       id: CREATOR,
@@ -326,5 +334,115 @@ describe("baseline window normalisation", () => {
     const quality = write?.payload["data_quality_json"] as { baselineScaledToWindow: boolean };
     // Not silently treated as a same-length window.
     expect(quality.baselineScaledToWindow).toBe(false);
+  });
+});
+
+describe("the declared window matches the queried window", () => {
+  /**
+   * The bug this guards: the producer declared a 7-day window and scaled the
+   * baseline by 7, while `.gte(date, isoDaysAgo(7))` with no upper bound
+   * selects `since … today` -- eight calendar dates. A creator performing
+   * exactly at baseline therefore read as +14.29%, and that figure reaches a
+   * real rule gate (`acquisitionChange >= 5`).
+   *
+   * Asserting the bound the code actually queries with, rather than trusting
+   * the constant, is the only way this class of drift is caught: the previous
+   * test fed the harness exactly seven rows and so agreed with whichever
+   * window the code believed in.
+   */
+  function seedWindowFixtures() {
+    tables.set("creator_baselines", {
+      data: { metrics_json: baselineMetrics, period_start: "2026-07-25", period_end: "2026-08-24" },
+      error: null,
+    });
+    tables.set("creator_revenue_daily", {
+      data: [
+        { date: "2026-08-28", creator_platform_receipts: 100, new_subscribers: 2, first_buyers: 1 },
+      ],
+      error: null,
+    });
+    tables.set("social_posts", { data: [], error: null });
+    tables.set("daily_creator_reports", {
+      data: { id: "55555555-5555-4555-8555-555555555555" },
+      error: null,
+    });
+  }
+
+  function boundFor(table: string, op: string) {
+    return bounds.find((entry) => entry.table === table && entry.op === op);
+  }
+
+  function daysBetweenInclusive(since: string, until: string) {
+    return (
+      Math.round(
+        (Date.parse(`${until}T00:00:00.000Z`) - Date.parse(`${since}T00:00:00.000Z`)) / 86_400_000,
+      ) + 1
+    );
+  }
+
+  it("bounds the revenue query to exactly the number of days it claims", async () => {
+    seedWindowFixtures();
+    const result = await produceDailyCreatorReport({ organizationId: ORG, creatorId: CREATOR });
+    expect(result.produced).toBe(true);
+
+    const write = writes.find((entry) => entry.table === "daily_creator_reports");
+    const declaredDays = (write?.payload["data_quality_json"] as { currentWindowDays: number })
+      .currentWindowDays;
+
+    const lower = boundFor("creator_revenue_daily", "gte");
+    const upper = boundFor("creator_revenue_daily", "lte");
+    expect(lower?.column).toBe("date");
+    // Without an upper bound the query is "everything from `since` onwards",
+    // which silently picks up any row dated ahead of the report and brings the
+    // 7-vs-8 drift straight back.
+    expect(upper?.column).toBe("date");
+
+    expect(daysBetweenInclusive(String(lower?.value), String(upper?.value))).toBe(declaredDays);
+  });
+
+  /**
+   * `social_posts.published_at` is a timestamptz, so its bounds are instants
+   * rather than dates and are built separately. The previous test asserted only
+   * the revenue bound, which left the social window free to drift on its own.
+   */
+  it("covers the same days in the social query, to the instant", async () => {
+    seedWindowFixtures();
+    await produceDailyCreatorReport({ organizationId: ORG, creatorId: CREATOR });
+
+    const revenueLower = String(boundFor("creator_revenue_daily", "gte")?.value);
+    const revenueUpper = String(boundFor("creator_revenue_daily", "lte")?.value);
+    const socialLower = boundFor("social_posts", "gte");
+    const socialUpper = boundFor("social_posts", "lt");
+
+    expect(socialLower?.column).toBe("published_at");
+    expect(socialUpper?.column).toBe("published_at");
+    // Starts at the first moment of the first day...
+    expect(socialLower?.value).toBe(`${revenueLower}T00:00:00.000Z`);
+    // ...and stops at the first moment of the day after the last, exclusive,
+    // so every moment of the final day counts and none of the next one does.
+    const dayAfter = new Date(Date.parse(`${revenueUpper}T00:00:00.000Z`) + 86_400_000)
+      .toISOString()
+      .slice(0, 10);
+    expect(socialUpper?.value).toBe(`${dayAfter}T00:00:00.000Z`);
+  });
+
+  /**
+   * The scheduler dates each report in the creator's own timezone
+   * (`reportDateFor(now, schedule.timezone)`), so two creators processed in the
+   * same tick can be given different report dates. A window anchored to the
+   * server's UTC "now" summed the same seven days for both, and the report
+   * dated tomorrow described yesterday's window while claiming a 7-day one.
+   */
+  it("anchors the window to the report date it was given, not to the server clock", async () => {
+    seedWindowFixtures();
+    await produceDailyCreatorReport({
+      organizationId: ORG,
+      creatorId: CREATOR,
+      reportDate: "2026-08-30",
+    });
+
+    expect(boundFor("creator_revenue_daily", "lte")?.value).toBe("2026-08-30");
+    // Seven inclusive days ending on the report's own date.
+    expect(boundFor("creator_revenue_daily", "gte")?.value).toBe("2026-08-24");
   });
 });

@@ -105,6 +105,22 @@ export async function createTask(session: AppSession, input: z.infer<typeof task
     if (!owner.data) throw new TaskError("CREATOR_NOT_FOUND", 404);
   }
 
+  // Same rule for the assignee. Without this the uuid was inserted verbatim,
+  // so a caller could assign a colleague from another tenant -- tasks.
+  // owner_user_id has no FK and no RLS to catch it -- and that person would
+  // then be named on a task they cannot see.
+  if (input.ownerUserId) {
+    const member = await client
+      .from("organization_memberships")
+      .select("user_id")
+      .eq("organization_id", session.organizationId)
+      .eq("user_id", input.ownerUserId)
+      .eq("active", true)
+      .maybeSingle();
+    if (member.error) throw databaseFailure("read-owner", member.error);
+    if (!member.data) throw new TaskError("OWNER_NOT_IN_ORGANIZATION", 404);
+  }
+
   const { data, error } = await client
     .from("tasks")
     .insert({
@@ -121,7 +137,7 @@ export async function createTask(session: AppSession, input: z.infer<typeof task
       source_type: "MANUAL",
       due_at: input.dueAt ?? null,
     })
-    .select("id,title,priority,status,department,creator_id,due_at,updated_at")
+    .select("id,title,priority,status,department,creator_id,owner_user_id,due_at,updated_at")
     .single();
   if (error) throw databaseFailure("write", error);
 

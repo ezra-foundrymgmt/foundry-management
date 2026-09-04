@@ -1,7 +1,7 @@
 import { AccessDenied } from "@/components/access-denied";
 import { authorizePage } from "@/lib/page-access";
 import Link from "next/link";
-import { creators } from "@creatoros/domain";
+import { creators, hasPermission } from "@creatoros/domain";
 import { Filter, Plus, Search } from "lucide-react";
 import { DemoStrip, PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
@@ -22,6 +22,16 @@ export default async function CreatorsPage() {
   const creatorRecords = isMockMode()
     ? creators.map((creator) => ({ ...creator, priority: null as string | null }))
     : await getLiveCreators();
+  // Creators are only ever created by converting a prospect, so the button is
+  // honest only for someone who can both reach that board and convert once
+  // they are there. Gating on creator.read alone dead-ended fan_ops, editor,
+  // finance and contractor at an access-denied page; gating on prospect.read
+  // alone still sent analyst and viewer to a board where every convert control
+  // is disabled.
+  const canAddCreator =
+    hasPermission(access.session.role, "prospect.read") &&
+    hasPermission(access.session.role, "creator.create");
+
   return (
     <main className="page">
       <DemoStrip />
@@ -30,9 +40,11 @@ export default async function CreatorsPage() {
         title="Creators"
         subtitle="Every creator business Foundry manages."
         actions={
-          <a className="button primary" href="/crm/prospects">
-            <Plus size={14} /> Add creator
-          </a>
+          canAddCreator ? (
+            <Link className="button primary" href="/crm/prospects">
+              <Plus size={14} /> Add creator
+            </Link>
+          ) : null
         }
       />
       <section className="card">

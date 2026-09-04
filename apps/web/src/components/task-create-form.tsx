@@ -15,6 +15,7 @@ export interface CreatedTask {
   status: string;
   department: string | null;
   creator_id: string | null;
+  owner_user_id: string | null;
   due_at: string | null;
   updated_at: string;
 }
@@ -23,6 +24,9 @@ export interface CreatedTask {
 const MESSAGES: Record<string, string> = {
   INVALID_INPUT: "Check the title, department and priority before saving.",
   CREATOR_NOT_FOUND: "That creator is not in this organization.",
+  // Reachable when the roster this form was loaded with has gone stale — the
+  // chosen colleague was deactivated or removed since the page loaded.
+  OWNER_NOT_IN_ORGANIZATION: "That person is no longer an active member. Reload and pick again.",
   PERMISSION_DENIED: "Creating tasks requires task permissions.",
   AUTHENTICATION_REQUIRED: "Your session expired. Sign in again.",
   DATABASE_NOT_CONFIGURED: "The live database is not configured in this environment.",
@@ -97,6 +101,10 @@ export function TaskCreateForm({
     setTitle("");
     setDueAt("");
     setCreatorId("");
+    // Cleared with the other per-task fields. Leaving it set meant the next
+    // task opened with the previous assignee still selected, so a second
+    // create silently assigned work to whoever the last one went to.
+    setOwnerUserId("");
     setOpen(false);
   }
 

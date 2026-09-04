@@ -335,11 +335,6 @@ h3 {
 .demo-strip strong {
   letter-spacing: 0.08em;
 }
-.demo-strip.live-strip {
-  color: #235c49;
-  background: #e4efe9;
-  border-color: #bdd7ca;
-}
 .grid {
   display: grid;
   gap: 14px;

@@ -55,12 +55,47 @@ function admin() {
   return client;
 }
 
-function isoDaysAgo(days: number): string {
-  return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+/**
+ * The trailing window `current` is summed over, in calendar days.
+ *
+ * The declared window and the queried window must be equal, because the
+ * baseline is scaled onto this number before the two are compared. They were
+ * not: the constant said 7 while an unbounded `.gte(isoDaysAgo(7))` returned 8
+ * dates, so a flat creator was reported as +14.29% — including on
+ * `acquisitionChange`, which gates a real rule.
+ */
+const CURRENT_WINDOW_DAYS = 7;
+
+function isoDate(instant: number): string {
+  return new Date(instant).toISOString().slice(0, 10);
 }
 
-/** The trailing window `current` is summed over. */
-const CURRENT_WINDOW_DAYS = 7;
+/**
+ * The window the report covers: CURRENT_WINDOW_DAYS calendar days ending on the
+ * report's own date, both bounds inclusive.
+ *
+ * Anchored to `reportDate` rather than to `Date.now()`. The scheduler dates
+ * each report in the *creator's* timezone (`reportDateFor(now, timezone)`), so
+ * at 22:00 UTC an Auckland creator's report is dated tomorrow while a Los
+ * Angeles creator's is dated today. A window anchored to the server's UTC
+ * "now" therefore summed a different seven days than the date printed on the
+ * report — and `currentWindowDays: 7` in data_quality_json described a window
+ * that did not end on the report date. It also made backfilling a past date
+ * silently report the last seven days instead of the seven the caller asked
+ * for.
+ *
+ * The upper bound is what makes the count exact. Without it the query is
+ * "everything from `since` onwards", which picks up any row dated ahead of the
+ * report — a creator east of UTC whose local date has already rolled over, or
+ * a backfill — and the 7-vs-8 drift returns.
+ */
+function currentWindow(reportDate: string): { since: string; until: string } {
+  const end = Date.parse(`${reportDate}T00:00:00.000Z`);
+  return {
+    since: isoDate(end - (CURRENT_WINDOW_DAYS - 1) * 86_400_000),
+    until: reportDate,
+  };
+}
 
 /**
  * Inclusive day count of a frozen baseline's period.
@@ -141,20 +176,25 @@ export async function produceDailyCreatorReport(input: {
   // baseline, and without one there is nothing to compare to.
   if (!baseline.success) return { produced: false, reason: "NO_BASELINE_FROZEN" };
 
-  const since = isoDaysAgo(7);
+  const { since, until } = currentWindow(reportDate);
   const [revenue, social] = await Promise.all([
     client
       .from("creator_revenue_daily")
       .select("date,creator_platform_receipts,new_subscribers,first_buyers")
       .eq("organization_id", input.organizationId)
       .eq("creator_id", input.creatorId)
-      .gte("date", since),
+      .gte("date", since)
+      .lte("date", until),
     client
       .from("social_posts")
       .select("reach,profile_visits,outbound_clicks")
       .eq("organization_id", input.organizationId)
       .eq("creator_id", input.creatorId)
-      .gte("published_at", `${since}T00:00:00.000Z`),
+      .gte("published_at", `${since}T00:00:00.000Z`)
+      // `published_at` is an instant, not a date, so the upper bound is the
+      // start of the day after `until` — exclusive, which covers every moment
+      // of the final day without reaching into the next one.
+      .lt("published_at", `${isoDate(Date.parse(`${until}T00:00:00.000Z`) + 86_400_000)}T00:00:00.000Z`),
   ]);
   if (revenue.error) throw new Error(`REVENUE_READ_FAILED: ${revenue.error.message}`);
   if (social.error) throw new Error(`SOCIAL_READ_FAILED: ${social.error.message}`);

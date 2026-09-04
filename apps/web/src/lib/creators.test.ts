@@ -36,10 +36,16 @@ const appendAudit = vi.fn(() => Promise.resolve());
 const logEvent = vi.fn();
 
 vi.mock("@/lib/supabase/admin", () => ({
-  createSupabaseAdminClient: () => ({ from: (table: string) => makeQuery(table) }),
+  createSupabaseAdminClient: (): { from: (table: string) => Record<string, unknown> } => ({
+    from: (table: string) => makeQuery(table),
+  }),
 }));
 vi.mock("@/lib/audit", () => ({ appendAudit: (...args: unknown[]) => appendAudit(...(args as [])) }));
-vi.mock("@/lib/observability", () => ({ logEvent: (...args: unknown[]) => logEvent(...(args as [])) }));
+vi.mock("@/lib/observability", () => ({
+  logEvent: (...args: unknown[]) => {
+    logEvent(...(args as []));
+  },
+}));
 
 const { updateCreatorPriority, CreatorError, creatorPrioritySchema } = await import("./creators");
 
@@ -159,7 +165,10 @@ describe("updateCreatorPriority", () => {
       priority: "CRITICAL",
       updatedAt: NOW,
     });
-    expect(result).toEqual({ id: MADISON, priority: "CRITICAL", updatedAt: expect.any(String) });
+    // Split rather than using expect.any, which is typed `any` and would
+    // launder an untyped value into the assertion.
+    expect(result).toMatchObject({ id: MADISON, priority: "CRITICAL" });
+    expect(typeof result.updatedAt).toBe("string");
     expect(logEvent).toHaveBeenCalledWith(
       "error",
       "creator.priority.audit_failed",

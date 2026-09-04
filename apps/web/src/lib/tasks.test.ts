@@ -43,10 +43,16 @@ const appendAudit = vi.fn(() => Promise.resolve());
 const logEvent = vi.fn();
 
 vi.mock("@/lib/supabase/admin", () => ({
-  createSupabaseAdminClient: () => ({ from: (table: string) => makeQuery(table) }),
+  createSupabaseAdminClient: (): { from: (table: string) => Record<string, unknown> } => ({
+    from: (table: string) => makeQuery(table),
+  }),
 }));
 vi.mock("@/lib/audit", () => ({ appendAudit: (...args: unknown[]) => appendAudit(...(args as [])) }));
-vi.mock("@/lib/observability", () => ({ logEvent: (...args: unknown[]) => logEvent(...(args as [])) }));
+vi.mock("@/lib/observability", () => ({
+  logEvent: (...args: unknown[]) => {
+    logEvent(...(args as []));
+  },
+}));
 
 const { createTask, updateTaskPriority, TaskError, taskCreateSchema, taskPrioritySchema } =
   await import("./tasks");
@@ -55,6 +61,7 @@ const ORG = "11111111-1111-4111-8111-111111111111";
 const OTHER_ORG = "99999999-9999-4999-8999-999999999999";
 const CREATOR = "20000000-0000-4000-8000-000000000001";
 const TASK = "40000000-0000-4000-8000-000000000001";
+const OWNER = "30000000-0000-4000-8000-000000000001";
 const NOW = "2026-09-03T12:00:00.000Z";
 
 const session = {
@@ -200,6 +207,83 @@ describe("createTask", () => {
     expect(appendAudit).not.toHaveBeenCalled();
   });
 
+  /**
+   * `owner_user_id` has no foreign key and no RLS behind it, so nothing in the
+   * database would have caught a uuid from another tenant. It was inserted
+   * verbatim while `creator_id` directly above it was proven first.
+   */
+  it("proves a supplied owner is an active member of the caller's organization", async () => {
+    singleResult = { user_id: OWNER };
+    await createTask(session, {
+      title: "Ship it",
+      department: "Growth",
+      priority: "HIGH",
+      ownerUserId: OWNER,
+    });
+    const lookup = recorded.find((entry) => entry.table === "organization_memberships");
+    expect(lookup?.filters).toEqual(
+      expect.arrayContaining([
+        ["eq", "organization_id", ORG],
+        ["eq", "user_id", OWNER],
+        // A deactivated colleague is not a valid assignee either.
+        ["eq", "active", true],
+      ]),
+    );
+  });
+
+  it("refuses an owner from another tenant rather than assigning work to them", async () => {
+    singleResult = null; // the org-scoped membership lookup finds nothing
+    await expect(
+      createTask(session, {
+        title: "Ship it",
+        department: "Growth",
+        priority: "HIGH",
+        ownerUserId: OWNER,
+      }),
+    ).rejects.toThrow("OWNER_NOT_IN_ORGANIZATION");
+    expect(recorded.some((entry) => entry.op === "insert")).toBe(false);
+    expect(appendAudit).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The created row is rendered straight into the task list without a refetch,
+   * so a field the insert does not return has to be invented by the client.
+   * `owner_user_id` was missing and the client hardcoded "Unassigned", which
+   * made a task created *with* an owner display as unowned.
+   */
+  it("actually writes the chosen owner, and null when none was chosen", async () => {
+    singleResult = { user_id: OWNER };
+    await createTask(session, {
+      title: "Ship it",
+      department: "Growth",
+      priority: "HIGH",
+      ownerUserId: OWNER,
+    });
+    expect(recorded.find((entry) => entry.op === "insert")?.payload).toMatchObject({
+      owner_user_id: OWNER,
+    });
+
+    recorded.length = 0;
+    singleResult = { id: TASK, title: "Ship it", priority: "HIGH" };
+    await createTask(session, { title: "Ship it", department: "Growth", priority: "HIGH" });
+    // Unassigned stays unassigned rather than defaulting to the requester.
+    expect(recorded.find((entry) => entry.op === "insert")?.payload).toMatchObject({
+      owner_user_id: null,
+    });
+  });
+
+  it("returns the owner it just wrote so the caller need not guess it", async () => {
+    singleResult = { id: TASK, title: "Ship it", priority: "HIGH", owner_user_id: OWNER };
+    await createTask(session, {
+      title: "Ship it",
+      department: "Growth",
+      priority: "HIGH",
+    });
+    const insert = recorded.find((entry) => entry.op === "insert");
+    const returning = insert?.filters.find(([op]) => op === "select")?.[1];
+    expect(returning).toContain("owner_user_id");
+  });
+
   it("never puts a driver message in the error the caller sees", async () => {
     queryError = { message: 'relation "public.tasks" does not exist' };
     await expect(
@@ -251,7 +335,10 @@ describe("updateTaskPriority", () => {
       priority: "CRITICAL",
       updatedAt: NOW,
     });
-    expect(result).toEqual({ id: TASK, priority: "CRITICAL", updatedAt: expect.any(String) });
+    // Split rather than using expect.any, which is typed `any` and would
+    // launder an untyped value into the assertion.
+    expect(result).toMatchObject({ id: TASK, priority: "CRITICAL" });
+    expect(typeof result.updatedAt).toBe("string");
     expect(logEvent).toHaveBeenCalledWith(
       "error",
       "task.audit_failed",

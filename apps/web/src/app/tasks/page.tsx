@@ -99,7 +99,13 @@ export default function TasksPage() {
         department: (created.department ?? "Operations") as Task["department"],
         priority: (created.priority ?? "MEDIUM") as Task["priority"],
         status: created.status as Task["status"],
-        owner: "Unassigned",
+        // Resolved from the roster the form was populated from. Hardcoding
+        // "Unassigned" here meant a task created WITH an owner displayed as
+        // unowned until the next full page load -- the one field on the new
+        // row that lied, while the creator name beside it resolved correctly.
+        owner: created.owner_user_id
+          ? (team.find((member) => member.id === created.owner_user_id)?.name ?? "Unknown user")
+          : "Unassigned",
         dueAt: created.due_at ? new Date(created.due_at).toLocaleDateString() : "Unscheduled",
         sourceType: "MANUAL",
         sourceId: null,

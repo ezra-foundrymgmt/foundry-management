@@ -1,5 +1,6 @@
 export * from "./fit-score";
 export * from "./health-score";
+export * from "./limits";
 export * from "./performance";
 export * from "./permissions";
 export * from "./pnl";

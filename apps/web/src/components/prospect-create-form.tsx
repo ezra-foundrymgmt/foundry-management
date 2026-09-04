@@ -3,6 +3,28 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Plus } from "lucide-react";
+import { clampFollowerEstimate } from "@creatoros/domain";
+
+/**
+ * What each server refusal means to the operator reading it.
+ *
+ * Every code POST /api/prospects can return has an entry. A missing one falls
+ * through to the generic message below, which is worse than it looks: it is
+ * the difference between "wait a moment and try again" and "this will never
+ * work", and the operator cannot tell which they are looking at.
+ */
+const MESSAGES: Record<string, string> = {
+  INVALID_INPUT: "Check the stage name, preferred name and email before saving.",
+  PERMISSION_DENIED: "Adding prospects requires prospect permissions.",
+  AUTHENTICATION_REQUIRED: "Your session expired. Sign in again.",
+  // Retryable, and the one most likely to be hit during a prospecting session.
+  RATE_LIMITED: "Too many requests just now. Wait a moment and try again.",
+  WRITES_REQUIRE_LIVE_MODE: "This environment is read-only. Prospects cannot be added here.",
+  PROSPECT_DATABASE_FAILED: "The prospect could not be saved. Nothing changed.",
+  // Deliberately does not promise "nothing changed": this is the route's
+  // catch-all, and it can fire after the row has already committed.
+  PROSPECT_CREATE_FAILED: "Something went wrong saving the prospect. Reload before retrying.",
+};
 
 /**
  * Adds a prospect to the pipeline.
@@ -62,11 +84,14 @@ export function ProspectCreateForm() {
         const reason = payload.error ?? `Request failed (${response.status})`;
         // The duplicate guard returns the existing prospect's number so the
         // operator can go find it instead of creating a second record.
-        throw new Error(
-          reason.startsWith("DUPLICATE_PROSPECT")
-            ? `Already in the pipeline as ${reason.split(":")[1] ?? "an existing prospect"}.`
-            : reason,
-        );
+        if (reason.startsWith("DUPLICATE_PROSPECT"))
+          throw new Error(
+            `Already in the pipeline as ${reason.split(":")[1] ?? "an existing prospect"}.`,
+          );
+        // Anything else is a machine code. Rendering it raw put the literal
+        // string "INVALID_INPUT" in front of the operator, which names no
+        // field and suggests no fix.
+        throw new Error(MESSAGES[reason] ?? "The prospect could not be saved. Nothing changed.");
       }
       setForm({
         preferredName: "",
@@ -94,7 +119,7 @@ export function ProspectCreateForm() {
     );
 
   return (
-    <form className="card card-pad" style={{ display: "grid", gap: 10, minWidth: 320 }} onSubmit={submit}>
+    <form className="card card-pad" style={{ display: "grid", gap: 10, minWidth: 320 }} onSubmit={(event) => void submit(event)}>
       <strong style={{ fontSize: 12 }}>New prospect</strong>
       {error ? (
         <p role="alert" style={{ color: "var(--red)", fontSize: 11, margin: 0 }}>
@@ -159,8 +184,12 @@ export function ProspectCreateForm() {
         <input
           className="input"
           inputMode="numeric"
+          // The server caps this at MAX_FOLLOWER_ESTIMATE. Clamping while the
+          // operator types keeps the field inside the bound, rather than
+          // accepting a larger number and answering INVALID_INPUT — a code
+          // that names no field — after a round trip.
           value={form.followerCountEstimate}
-          onChange={(event) => set("followerCountEstimate", event.target.value.replace(/\D/g, ""))}
+          onChange={(event) => set("followerCountEstimate", clampFollowerEstimate(event.target.value))}
         />
       </label>
       <label style={{ display: "grid", gap: 3, fontSize: 10.5 }}>

@@ -1,6 +1,6 @@
 import "server-only";
 import { z } from "zod";
-import { PIPELINE_STAGES } from "@creatoros/domain";
+import { MAX_FOLLOWER_ESTIMATE, PIPELINE_STAGES } from "@creatoros/domain";
 import type { AppSession } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { appendAudit } from "@/lib/audit";
@@ -13,7 +13,7 @@ export const prospectCreateSchema = z.object({
   niche: z.string().trim().max(120).optional(),
   primarySocialPlatform: z.string().trim().max(60).optional(),
   instagramUrl: z.string().url().max(500).optional(),
-  followerCountEstimate: z.number().int().min(0).max(1_000_000_000).optional(),
+  followerCountEstimate: z.number().int().min(0).max(MAX_FOLLOWER_ESTIMATE).optional(),
   source: z.string().trim().max(80).optional(),
   opportunityNotes: z.string().trim().max(4000).optional(),
 });
@@ -136,9 +136,27 @@ export async function createProspect(
   if (error) throw databaseFailure("write", error);
 
   const created = data as { id: string; prospect_number: string };
-  await appendAudit(session, "prospect.created", "prospect", created.id, {
-    prospectNumber: created.prospect_number,
-  });
+  /**
+   * Best-effort, matching createTask.
+   *
+   * The insert and the audit write are two independent network calls. Letting
+   * an audit failure propagate turned a committed prospect into a 500, and the
+   * form renders that as "Nothing changed" — so the operator would add the
+   * same prospect again. The row exists either way; a failure to attribute it
+   * is logged loudly rather than reported to the caller as a failure to create.
+   */
+  try {
+    await appendAudit(session, "prospect.created", "prospect", created.id, {
+      prospectNumber: created.prospect_number,
+    });
+  } catch (auditError) {
+    logEvent("error", "prospect.audit_failed", {
+      action: "prospect.created",
+      resourceId: created.id,
+      userId: session.userId,
+      message: auditError instanceof Error ? auditError.message : String(auditError),
+    });
+  }
   return created;
 }
 
