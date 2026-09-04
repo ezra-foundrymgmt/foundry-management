@@ -241,7 +241,11 @@ export class LiveSlackProvider implements SlackProvider {
   ): Promise<{ invited: boolean; reason?: string }> {
     const response = await this.#call("conversations.inviteShared", {
       channel: resourceId,
-      emails: [email],
+      // Comma-separated, not an array. Slack documents `emails` as a list, and
+      // a JSON body accepted the array shape — but this client form-encodes
+      // (conversations.info rejects JSON outright), and form encoding has no
+      // array. Same convention as `users` on conversations.invite above.
+      emails: email,
     });
     if (response.ok) return { invited: true };
     /**
@@ -295,11 +299,45 @@ export class LiveSlackProvider implements SlackProvider {
     const response = await this.#call(method, body);
     if (!response.ok) throw new ProviderApiError("SLACK", response.error ?? "API_ERROR");
   }
+  /**
+   * Calls the Slack Web API, form-encoded.
+   *
+   * Not JSON. Slack accepts a JSON body for most write methods but NOT for
+   * every method: `conversations.info` answers `invalid_arguments` to a JSON
+   * body and requires form encoding or a query string. Verified against the
+   * live API rather than inferred — a JSON `conversations.info` really does
+   * fail while `conversations.list` and `conversations.setPurpose` succeed,
+   * which is why this went unnoticed.
+   *
+   * The consequence was worse than a broken read. `#assertPrivateChannel` and
+   * `#findOwnedChannel` both go through this, so the only two paths that
+   * reconcile an existing channel could never succeed: an interrupted run
+   * silently created a duplicate instead of reclaiming its own channel, and a
+   * double collision failed the whole activation step with CHANNEL_INFO_FAILED.
+   * Neither surfaced in testing because the happy path never takes them.
+   *
+   * Form encoding is what Slack documents for every method used here, and all
+   * six were re-verified against the live API after this change.
+   */
   async #call(method: string, body: Record<string, unknown>): Promise<SlackResponse> {
+    const form = new URLSearchParams();
+    for (const [key, value] of Object.entries(body)) {
+      if (value === undefined || value === null) continue;
+      // Scalars only. An object would stringify to "[object Object]" and be
+      // sent to Slack as though it were a real value — a channel named that,
+      // or a purpose set to it. Every call site passes scalars, so anything
+      // else is a bug worth surfacing rather than encoding.
+      if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean")
+        throw new ProviderApiError("SLACK", "NON_SCALAR_PARAMETER", key);
+      form.set(key, String(value));
+    }
     const response = await this.request(`https://slack.com/api/${method}`, {
       method: "POST",
-      headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
-      body: JSON.stringify(body),
+      headers: {
+        authorization: `Bearer ${this.token}`,
+        "content-type": "application/x-www-form-urlencoded; charset=utf-8",
+      },
+      body: form,
     });
     if (!response.ok) throw new ProviderApiError("SLACK", `HTTP_${response.status}`);
     return (await response.json()) as SlackResponse;

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { MAX_FOLLOWER_ESTIMATE, clampFollowerEstimate } from "./limits";
 import {
   CONTRACT_STATUSES_SATISFYING_GATE,
-  FALLBACK_COMMISSION_RATE,
   UNSET_TIMEZONE,
   hasRealTimezone,
   readCommissionRate,
@@ -84,22 +83,27 @@ describe("organisation commission rate", () => {
   it("reads a configured rate", () => {
     expect(readCommissionRate({ defaultCommissionRate: 0.3 })).toBe(0.3);
     expect(readCommissionRate({ defaultCommissionRate: 0.42 })).toBe(0.42);
+    // A string is how a hand-edited settings blob often arrives.
+    expect(readCommissionRate({ defaultCommissionRate: "0.25" })).toBe(0.25);
   });
 
-  it("falls back when the organisation has not set one", () => {
-    expect(readCommissionRate({})).toBe(FALLBACK_COMMISSION_RATE);
-    expect(readCommissionRate(null)).toBe(FALLBACK_COMMISSION_RATE);
-    expect(readCommissionRate(undefined)).toBe(FALLBACK_COMMISSION_RATE);
+  /**
+   * An earlier version returned 0.3 whenever the key was absent. No migration
+   * or seed ever writes that key, so EVERY organisation was unconfigured and
+   * every welcome package stated "Foundry takes 30%" as fact that nobody had
+   * entered — routing around the guard built for exactly this case.
+   */
+  it("returns null when the organisation has not set one, never a default", () => {
+    expect(readCommissionRate({})).toBeNull();
+    expect(readCommissionRate(null)).toBeNull();
+    expect(readCommissionRate(undefined)).toBeNull();
+    expect(readCommissionRate({ defaultCommissionRate: null })).toBeNull();
+    expect(readCommissionRate("not an object")).toBeNull();
   });
 
   it("refuses a rate that would misstate the arrangement to a creator", () => {
-    // 0 would tell her Foundry takes nothing; >= 1 would claim more than she earns.
-    expect(readCommissionRate({ defaultCommissionRate: 0 })).toBe(FALLBACK_COMMISSION_RATE);
-    expect(readCommissionRate({ defaultCommissionRate: 1 })).toBe(FALLBACK_COMMISSION_RATE);
-    expect(readCommissionRate({ defaultCommissionRate: 1.5 })).toBe(FALLBACK_COMMISSION_RATE);
-    expect(readCommissionRate({ defaultCommissionRate: -0.2 })).toBe(FALLBACK_COMMISSION_RATE);
-    expect(readCommissionRate({ defaultCommissionRate: "thirty percent" })).toBe(
-      FALLBACK_COMMISSION_RATE,
-    );
+    // 0 would tell her Foundry takes nothing; >= 1 would claim all she earns.
+    for (const bad of [0, 1, 1.5, -0.2, "thirty percent", Number.NaN, []])
+      expect(readCommissionRate({ defaultCommissionRate: bad }), String(bad)).toBeNull();
   });
 });

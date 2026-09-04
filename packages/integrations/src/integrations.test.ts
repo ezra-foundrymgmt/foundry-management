@@ -94,11 +94,7 @@ describe("live provider adapters", () => {
       // is "[object Object]" — extract the href for each shape instead.
       const href = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
       const method = href.split("/api/")[1] ?? "";
-      const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
-        name?: string;
-        channel?: string;
-        purpose?: string;
-      };
+      const body = slackBody(init);
       if (method === "conversations.create") {
         attempted.push(body.name ?? "");
         if (channels.has(body.name ?? ""))
@@ -215,13 +211,23 @@ describe("live provider adapters", () => {
   });
 
   /** Slack fake where the requested name is already taken by `existing`. */
+  /** Reads a Slack request body, which the provider sends form-encoded. */
+  function slackBody(init?: RequestInit): Record<string, string> {
+    const raw = init?.body;
+    if (raw instanceof URLSearchParams) return Object.fromEntries(raw.entries());
+    if (typeof raw === "string") {
+      // Tolerate JSON too, so this helper stays usable if a caller changes.
+      if (raw.trimStart().startsWith("{")) return JSON.parse(raw) as Record<string, string>;
+      return Object.fromEntries(new URLSearchParams(raw).entries());
+    }
+    return {};
+  }
+
   function slackNameTakenFake(existing: { id: string; is_private: boolean }): typeof fetch {
     let requestedName = "";
     return (url, init) => {
       const method = urlOf(url).split("/api/")[1];
-      const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
-        name?: string;
-      };
+      const body = slackBody(init);
       if (method === "conversations.create") {
         requestedName = body.name ?? "";
         return Promise.resolve(new Response(JSON.stringify({ ok: false, error: "name_taken" })));

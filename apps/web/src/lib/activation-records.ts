@@ -184,18 +184,25 @@ export class SupabaseActivationRecordPort implements ActivationRecordPort {
   }
 
   /**
-   * The organisation's standard commission rate.
+   * The organisation's standard commission rate, or null when none is set.
    *
-   * Falls back rather than throwing: a missing or malformed setting must not
-   * strand a creator mid-activation, and readCommissionRate already refuses
-   * anything outside (0, 1).
+   * THROWS on a read failure, deliberately. Swallowing the error made a
+   * transient database fault indistinguishable from "no rate configured":
+   * both produced null, both got written onto the P&L period, and the step
+   * was marked SUCCEEDED — after which `advance` never re-runs it, so nothing
+   * would ever read the real setting again. Activation is resumable, so a
+   * failed step is recoverable; a silently wrong commercial term is not.
+   *
+   * A genuinely absent setting still returns null, which the welcome package
+   * reports as "Commission rate not recorded" rather than inventing one.
    */
-  async #commissionRate(): Promise<number> {
-    const { data } = await this.#admin()
+  async #commissionRate(): Promise<number | null> {
+    const { data, error } = await this.#admin()
       .from("organizations")
       .select("settings_json")
       .eq("id", this.organizationId)
       .maybeSingle();
+    if (error) throw new Error(`ACTIVATION_RECORD_FAILED:organizations: ${error.message}`);
     return readCommissionRate((data as { settings_json?: unknown } | null)?.settings_json);
   }
 

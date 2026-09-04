@@ -156,24 +156,32 @@ export const CONTRACT_STATUSES_SATISFYING_GATE: readonly ContractStatus[] = ["SI
  */
 export const ORGANIZATION_COMMISSION_RATE_KEY = "defaultCommissionRate";
 
-/** Used when the organisation has not set one. */
-export const FALLBACK_COMMISSION_RATE = 0.3;
-
 /**
  * Reads the organisation's default commission rate from its settings blob.
  *
- * Refuses anything outside (0, 1). A rate of 0 would tell a creator Foundry
- * takes nothing and a rate above 1 would claim more than they earn — both get
- * printed verbatim into a welcome package, so a malformed setting falls back to
- * the known default rather than propagating into a document a creator reads.
+ * Returns NULL when unset or malformed, rather than a default. That is the
+ * whole point, and an earlier version of this function got it wrong: it
+ * returned 0.3 whenever the key was absent, and since no migration or seed ever
+ * writes the key, every organisation was unconfigured — so a welcome package
+ * told a creator "Foundry takes 30% of your platform receipts" as a statement
+ * of fact that nobody had ever entered. It also routed around the guard built
+ * for exactly this, which says "Commission rate not recorded. Do not send this
+ * without it."
+ *
+ * A commercial term a creator reads and relies on is the last place to apply a
+ * convenient default. Unset means unset.
+ *
+ * Anything outside (0, 1) is also null: 0 would tell a creator Foundry takes
+ * nothing, and a value at or above 1 would claim all of their earnings or more.
  */
-export function readCommissionRate(settings: unknown): number {
+export function readCommissionRate(settings: unknown): number | null {
   const value =
     typeof settings === "object" && settings !== null
       ? (settings as Record<string, unknown>)[ORGANIZATION_COMMISSION_RATE_KEY]
       : undefined;
+  if (value === undefined || value === null || value === "") return null;
   const rate = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(rate) && rate > 0 && rate < 1 ? rate : FALLBACK_COMMISSION_RATE;
+  return Number.isFinite(rate) && rate > 0 && rate < 1 ? rate : null;
 }
 
 /**
