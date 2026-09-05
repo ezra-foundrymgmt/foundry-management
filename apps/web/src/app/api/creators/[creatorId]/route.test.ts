@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type * as CreatorsModule from "@/lib/creators";
 
 /**
  * The PATCH route dispatches on which fields the body carries, and two of them
@@ -20,9 +21,16 @@ import { describe, expect, it, vi } from "vitest";
  * This exercises the handler rather than the schema, because the schema was
  * never the broken part.
  */
-const compliance = vi.fn(() => Promise.resolve({ ok: "compliance" }));
-const assignment = vi.fn(() => Promise.resolve({ ok: "assignment" }));
-const priority = vi.fn(() => Promise.resolve({ ok: "priority" }));
+/**
+ * Declared through the generic rather than as a bare `vi.fn(() => ...)`.
+ * Without a signature the recorded call tuple is `[]`, so `calls[0][2]` is a
+ * type error and the assertion that the right FIELDS reached the write — the
+ * part that actually catches this bug — cannot be written at all.
+ */
+type CreatorWrite = (session: unknown, creatorId: string, input: unknown) => Promise<unknown>;
+const compliance = vi.fn<CreatorWrite>(() => Promise.resolve({ ok: "compliance" }));
+const assignment = vi.fn<CreatorWrite>(() => Promise.resolve({ ok: "assignment" }));
+const priority = vi.fn<CreatorWrite>(() => Promise.resolve({ ok: "priority" }));
 
 vi.mock("@/lib/auth", () => ({
   AuthorizationError: class extends Error {
@@ -38,7 +46,7 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 vi.mock("@/lib/creators", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/creators")>("@/lib/creators");
+  const actual = await vi.importActual<typeof CreatorsModule>("@/lib/creators");
   return {
     ...actual,
     updateCreatorCompliance: compliance,
