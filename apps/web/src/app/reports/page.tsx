@@ -451,10 +451,13 @@ function CoverageNote({ coverage }: { coverage: ReportCoverage | null }) {
     parts.push(
       `revenue entered for ${coverage.revenueDays} ${coverage.revenueDays === 1 ? "day" : "days"}`,
     );
-  if (coverage.socialPosts !== null)
+  if (coverage.socialPosts === 0) parts.push("no social posts");
+  else if (coverage.socialPosts !== null)
     parts.push(
       `${coverage.socialPosts} social ${coverage.socialPosts === 1 ? "post" : "posts"}` +
-        (coverage.socialDays !== null ? ` across ${coverage.socialDays}` : ""),
+        (coverage.socialDays === null
+          ? ""
+          : ` across ${coverage.socialDays} ${coverage.socialDays === 1 ? "day" : "days"}`),
     );
   if (coverage.dataConfidence) parts.push(`confidence ${coverage.dataConfidence}`);
   if (parts.length === 0) return null;
