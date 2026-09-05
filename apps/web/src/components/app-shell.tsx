@@ -32,6 +32,7 @@ const nav = [
   { label: "Prospects", href: "/crm/prospects", icon: Target },
   { label: "Applications", href: "/crm/applications", icon: ClipboardCheck },
   { label: "Creators", href: "/creators", icon: Users },
+  { label: "Intake", href: "/intake", icon: ClipboardCheck },
   { section: "Operations" },
   { label: "Workflows", href: "/workflows", icon: Workflow },
   { label: "Tasks", href: "/tasks", icon: ListChecks },

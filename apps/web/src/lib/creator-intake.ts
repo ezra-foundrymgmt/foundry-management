@@ -441,3 +441,176 @@ export async function applyIntakeSubmission(
 
   return { applied: true, creatorId, counts };
 }
+
+// ---------------------------------------------------------------------------
+// 4. Review
+// ---------------------------------------------------------------------------
+
+export interface IntakeSubmissionSummary {
+  id: string;
+  status: string;
+  creatorId: string | null;
+  creatorName: string | null;
+  referenceCodeSubmitted: string | null;
+  respondentEmail: string | null;
+  submittedAt: string;
+  appliedAt: string | null;
+  errorMessage: string | null;
+  mapped: MappedIntake;
+  blockers: string[];
+}
+
+const mappedShape = z.object({
+  brandProfile: z.record(z.string(), z.unknown()).default({}),
+  boundaries: z.array(z.record(z.string(), z.unknown())).default([]),
+  truthItems: z.array(z.record(z.string(), z.unknown())).default([]),
+  contentPillars: z.array(z.record(z.string(), z.unknown())).default([]),
+  socialHandles: z.array(z.record(z.string(), z.unknown())).default([]),
+  referenceCode: z.string().nullable().default(null),
+  respondentEmail: z.string().nullable().default(null),
+  statedStageName: z.string().nullable().default(null),
+  adult: z
+    .object({
+      attested: z.boolean().default(false),
+      reportedAge: z.number().nullable().default(null),
+      rawAge: z.string().nullable().default(null),
+      belowMinimum: z.boolean().default(false),
+    })
+    .default({ attested: false, reportedAge: null, rawAge: null, belowMinimum: false }),
+  reviewNotes: z.array(z.string()).default([]),
+  unrecognized: z.array(z.record(z.string(), z.unknown())).default([]),
+});
+
+/**
+ * What the operator sees before deciding.
+ *
+ * Tolerant on the mapped shape: a submission stored by an older version of the
+ * mapper must still be reviewable, because refusing to render it would strand
+ * a creator's answers with no way to act on them.
+ */
+export async function listIntakeSubmissions(
+  session: AppSession,
+  options: { limit?: number } = {},
+): Promise<IntakeSubmissionSummary[]> {
+  const client = admin();
+  const { data, error } = await client
+    .from("creator_intake_submissions")
+    .select(
+      "id,status,creator_id,reference_code_submitted,respondent_email,submitted_at,applied_at,error_message,mapped_json,creators(stage_name)",
+    )
+    .eq("organization_id", session.organizationId)
+    .order("received_at", { ascending: false })
+    .limit(options.limit ?? 50);
+  if (error) throw new IntakeError("INTAKE_DATABASE_FAILED", 500);
+
+  return (data ?? []).flatMap((raw) => {
+    const row = raw as Record<string, unknown>;
+    const parsed = mappedShape.safeParse(row["mapped_json"]);
+    if (!parsed.success) {
+      logEvent("warn", "intake.unreadable_mapping", { submissionId: String(row["id"]) });
+      return [];
+    }
+    const mapped = parsed.data as unknown as MappedIntake;
+    return [
+      {
+        id: String(row["id"]),
+        status: String(row["status"]),
+        creatorId: (row["creator_id"] as string | null) ?? null,
+        creatorName:
+          (row["creators"] as { stage_name?: string } | null)?.stage_name ?? null,
+        referenceCodeSubmitted: (row["reference_code_submitted"] as string | null) ?? null,
+        respondentEmail: (row["respondent_email"] as string | null) ?? null,
+        submittedAt: String(row["submitted_at"]),
+        appliedAt: (row["applied_at"] as string | null) ?? null,
+        errorMessage: (row["error_message"] as string | null) ?? null,
+        mapped,
+        blockers: intakeBlockers(mapped),
+      },
+    ];
+  });
+}
+
+/** Records that a submission was looked at and deliberately not applied. */
+export async function rejectIntakeSubmission(
+  session: AppSession,
+  submissionId: string,
+  reason: string,
+): Promise<{ rejected: true }> {
+  const client = admin();
+  const { data, error } = await client
+    .from("creator_intake_submissions")
+    .update({
+      status: "REJECTED",
+      error_message: reason,
+      applied_by: session.userId,
+      applied_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("organization_id", session.organizationId)
+    .eq("id", submissionId)
+    // An applied submission is a historical fact; rejecting it afterwards would
+    // misdescribe what happened to the creator record.
+    .neq("status", "APPLIED")
+    .select("id")
+    .maybeSingle();
+  if (error) throw new IntakeError("INTAKE_DATABASE_FAILED", 500);
+  if (!data) throw new IntakeError("SUBMISSION_NOT_REJECTABLE", 409);
+
+  try {
+    await appendAudit(session, "creator.intake.rejected", "creator_intake_submission", submissionId, {
+      reason,
+    });
+  } catch {
+    /* audit failure must not undo the rejection */
+  }
+  return { rejected: true };
+}
+
+/**
+ * Attaches a submission to a creator by hand.
+ *
+ * The recovery path for the one thing an editable prefill guarantees will
+ * happen: a creator clears or mistypes the reference code. Her email usually
+ * makes the match obvious, and an operator asserting it is a better record than
+ * a fuzzy match the system guessed at.
+ */
+export async function matchIntakeSubmission(
+  session: AppSession,
+  submissionId: string,
+  creatorId: string,
+): Promise<{ matched: true }> {
+  const client = admin();
+  const creator = await client
+    .from("creators")
+    .select("id,stage_name")
+    .eq("organization_id", session.organizationId)
+    .eq("id", creatorId)
+    .maybeSingle();
+  if (creator.error) throw new IntakeError("INTAKE_DATABASE_FAILED", 500);
+  if (!creator.data) throw new IntakeError("CREATOR_NOT_FOUND", 404);
+
+  const { data, error } = await client
+    .from("creator_intake_submissions")
+    .update({
+      creator_id: creatorId,
+      status: "PENDING_REVIEW",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("organization_id", session.organizationId)
+    .eq("id", submissionId)
+    .eq("status", "UNMATCHED")
+    .select("id")
+    .maybeSingle();
+  if (error) throw new IntakeError("INTAKE_DATABASE_FAILED", 500);
+  if (!data) throw new IntakeError("SUBMISSION_NOT_UNMATCHED", 409);
+
+  try {
+    await appendAudit(session, "creator.intake.matched", "creator", creatorId, {
+      submissionId,
+      stageName: (creator.data as { stage_name: string }).stage_name,
+    });
+  } catch {
+    /* audit failure must not undo the match */
+  }
+  return { matched: true };
+}

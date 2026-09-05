@@ -230,6 +230,8 @@ export function ActivationGates({
           </select>
         </label>
 
+        <IntakeLinkControl creatorId={creatorId} />
+
         <BoundaryForm
           busy={busy !== null}
           count={boundaryCount}
@@ -408,5 +410,94 @@ function BaselineForm({
         </button>
       </div>
     </form>
+  );
+}
+
+/**
+ * Mints the link the creator opens to fill in her Model Information Sheet.
+ *
+ * It sits among the gates because that is what it feeds: her boundaries clear
+ * the boundaries gate, and her answers fill the brand profile and content
+ * pillars that activation otherwise creates empty.
+ *
+ * The link is shown rather than sent. On Slack's free plan a creator cannot be
+ * put in a Slack Connect channel at all, so there is no channel to post it to —
+ * the operator copies it and sends it however they already talk to her.
+ */
+function IntakeLinkControl({ creatorId }: { creatorId: string }) {
+  const [busy, setBusy] = useState(false);
+  const [link, setLink] = useState<{ url: string; referenceCode: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState("");
+
+  async function issue() {
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/creators/${creatorId}/intake-link`, { method: "POST" });
+      const body = (await response.json()) as {
+        url?: string;
+        referenceCode?: string;
+        error?: string;
+      };
+      if (!response.ok || !body.url || !body.referenceCode) {
+        setError(body.error ?? "Could not issue an intake link");
+        return;
+      }
+      setLink({ url: body.url, referenceCode: body.referenceCode });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copy() {
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link.url);
+      setCopied(true);
+    } catch {
+      // Clipboard access is denied in some contexts; the URL is on screen and
+      // selectable, so this is a downgrade rather than a failure.
+      setCopied(false);
+      setError("Could not copy automatically — select the link below instead.");
+    }
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 6, fontSize: 11 }}>
+      <span className="eyebrow">MODEL INFORMATION SHEET</span>
+      {error ? (
+        <p role="alert" style={{ color: "var(--red)", fontSize: 11 }}>
+          {error}
+        </p>
+      ) : null}
+      {link ? (
+        <>
+          <p style={{ fontSize: 10.5, color: "var(--ink-soft)" }}>
+            Reference code <strong>{link.referenceCode}</strong>. Send her this link — the code is
+            filled in for her.
+          </p>
+          <input className="input" readOnly value={link.url} onFocus={(e) => e.target.select()} />
+          <div className="actions">
+            <button className="button" type="button" onClick={() => void copy()}>
+              {copied ? "Copied" : "Copy link"}
+            </button>
+            <button className="button" type="button" disabled={busy} onClick={() => void issue()}>
+              Issue a new one
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <button className="button" type="button" disabled={busy} onClick={() => void issue()}>
+            {busy ? "Issuing…" : "Issue intake link"}
+          </button>
+          <span style={{ fontSize: 9.5, color: "var(--ink-soft)" }}>
+            Her answers arrive in Intake review. Nothing is written to her record until you apply
+            them.
+          </span>
+        </>
+      )}
+    </div>
   );
 }
