@@ -28,7 +28,23 @@ export async function PATCH(request: Request, context: { params: Promise<{ creat
      * three take the same `updatedAt` concurrency token, so the dispatch is
      * about which columns are being written, not about authority.
      */
-    if ("jurisdictionReviewStatus" in keys || "adultConfirmationStatus" in keys) {
+    /**
+     * `contractStatus` and `timezone` belong in this branch, not the fallback.
+     *
+     * Both were added to `creatorComplianceSchema` and to the activation-gates
+     * panel, which sends each on its own -- `{ contractStatus, updatedAt }`,
+     * `{ timezone, updatedAt }`. Neither key appeared in this dispatch, so both
+     * bodies fell through to `creatorPrioritySchema`, which requires a
+     * `priority` field, and every attempt to answer either gate returned 400
+     * INVALID_INPUT. The two gates that had just been made capable of failing
+     * were, through the product, impossible to answer.
+     */
+    if (
+      "jurisdictionReviewStatus" in keys ||
+      "adultConfirmationStatus" in keys ||
+      "contractStatus" in keys ||
+      "timezone" in keys
+    ) {
       const body = creatorComplianceSchema.safeParse(raw);
       if (!body.success) return NextResponse.json({ error: "INVALID_INPUT" }, { status: 400 });
       return NextResponse.json(await updateCreatorCompliance(session, creatorId, body.data));
