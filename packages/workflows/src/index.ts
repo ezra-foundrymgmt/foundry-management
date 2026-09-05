@@ -5,6 +5,27 @@ import type {
   SlackProvider,
 } from "@creatoros/integrations";
 
+/**
+ * NO CREATOR SLACK CHANNEL. The step that made one is gone, deliberately.
+ *
+ * Foundry is on Slack's free plan, and a free workspace cannot ORIGINATE a
+ * Slack Connect channel invitation — it can only accept one. `inviteShared`
+ * answers `not_paid`, and no scope changes that. The alternative, adding each
+ * creator as a full workspace member, is worse than useless for an agency: on
+ * Free and Pro alike every member can browse the People directory and DM any
+ * other member, with no setting that hides them, so each creator would be able
+ * to see by name every other creator Foundry manages.
+ *
+ * So a creator cannot be put in a Slack channel at all, and pretending
+ * otherwise would leave an empty room named after her and a welcome message
+ * with no audience. The internal channel remains — it is the team talking about
+ * her, which is the half that works — and her intake link is handed to an
+ * operator to send however they already talk to her.
+ *
+ * The provider keeps `inviteExternalByEmail`. It is correct, tested, and the
+ * only thing standing between here and a creator channel is a billing
+ * decision that can reverse in a day.
+ */
 export const ACTIVATION_STEPS = [
   "VALIDATE_CREATOR",
   "LOCK_IDEMPOTENCY",
@@ -17,7 +38,6 @@ export const ACTIVATION_STEPS = [
   "CREATE_COMPETITOR_RESEARCH",
   "CREATE_CONTENT_TEST_BOARD",
   "CREATE_INTERNAL_TASKS",
-  "PROVISION_SLACK_CREATOR",
   "PROVISION_SLACK_INTERNAL",
   "PROVISION_NOTION_HUB",
   "PROVISION_NOTION_INTERNAL",
@@ -27,6 +47,16 @@ export const ACTIVATION_STEPS = [
   "CREATE_BASELINE_REQUEST",
   "SCHEDULE_DAILY_REPORT",
   "SCHEDULE_WEEKLY_REVIEW",
+  /**
+   * Parks until the creator's Model Information Sheet has been reviewed and
+   * applied.
+   *
+   * Placed before the welcome package because the package quotes her boundaries
+   * back to her, and a package composed before she has stated any would tell a
+   * creator that Foundry has nothing recorded about what she will not do — on
+   * the first document she ever reads from us.
+   */
+  "AWAIT_INTAKE",
   "GENERATE_WELCOME_PACKAGE",
   "POST_WELCOME_NOTIFICATION",
   "MARK_PROVISIONING_COMPLETE",
@@ -47,6 +77,21 @@ export const OFFBOARDING_STEPS = [
   "MARK_CREATOR_FORMER",
 ] as const;
 export type OffboardingStepName = (typeof OFFBOARDING_STEPS)[number];
+
+/**
+ * The steps that wait on something outside this workflow, and the condition
+ * each waits for.
+ *
+ * A table rather than a chain of `if`s so that adding a third gate cannot
+ * accidentally omit the re-evaluation that makes them safe — every gate here is
+ * checked on every pass, including passes that arrive by resume.
+ */
+const AWAIT_GATES: Partial<
+  Record<ActivationStepName, (creator: OnboardingCreator) => boolean>
+> = {
+  AWAIT_INTAKE: (creator) => creator.intakeApplied,
+  AWAIT_BASELINE_READINESS: (creator) => creator.baselineReady,
+};
 export type WorkflowStepStatus =
   | "PENDING"
   | "READY"
@@ -82,6 +127,14 @@ export interface OnboardingCreator {
    */
   teamSlackUserIds: string[];
   boundariesCollected: boolean;
+  /**
+   * Whether a reviewed intake submission has been applied to this creator.
+   *
+   * Required rather than defaulted for the same reason teamSlackUserIds is: a
+   * field that can be silently omitted defaults to the permissive answer, and
+   * the whole point of AWAIT_INTAKE is that it must not be walked past.
+   */
+  intakeApplied: boolean;
   baselineReady: boolean;
 }
 
@@ -385,8 +438,10 @@ export class OnboardingService {
     }
     // Re-evaluated on every pass, never skipped because it is already
     // WAITING_EXTERNAL: skipping it let a resume walk straight past the gate and
-    // complete an activation whose baseline data had still never arrived.
-    if (step.name === "AWAIT_BASELINE_READINESS" && !creator.baselineReady) {
+    // complete an activation whose baseline data had still never arrived. The
+    // same property is what makes AWAIT_INTAKE safe to add beside it.
+    const gate = AWAIT_GATES[step.name];
+    if (gate && !gate(creator)) {
       step.status = "WAITING_EXTERNAL";
       step.completedAt = new Date().toISOString();
       run.status = "WAITING_EXTERNAL";
@@ -432,45 +487,27 @@ export class OnboardingService {
    * with two private channels containing only the bot — and the welcome message
    * posted into one of them with no audience.
    *
-   * The two audiences differ in exactly one way, and it is the important one:
-   * the internal channel is the team talking ABOUT the creator, so the creator
-   * is never invited to it. Nothing here may invite an external address to an
-   * internal channel.
+   * Only the internal audience remains. The creator branch used to Slack
+   * Connect her into her own channel; that channel no longer exists, because a
+   * free workspace cannot originate a Connect invite (see ACTIVATION_STEPS).
+   * The branch is removed rather than left unreachable — an invite path nothing
+   * can call is indistinguishable from one that silently stopped working.
+   *
+   * The audience parameter goes with it. One caller, one audience: a parameter
+   * that can only take one value is a lie about what varies.
+   *
+   * The topic still says the creator is not in this channel. That sentence is
+   * now the only thing telling a reader she cannot see what is written here.
    */
   async #populateChannel(
     channel: ProvisionedResource,
     creator: OnboardingCreator,
-    audience: "creator" | "internal",
   ): Promise<void> {
     await this.providers.slack.inviteMembers(channel.externalId, creator.teamSlackUserIds);
-
     await this.providers.slack.setTopic(
       channel.externalId,
-      audience === "creator"
-        ? `${creator.stageName} and the Foundry team. Day-to-day coordination.`
-        : `Foundry internal for ${creator.stageName}. The creator is not in this channel.`,
+      `Foundry internal for ${creator.stageName}. The creator is not in this channel.`,
     );
-
-    if (audience !== "creator") return;
-
-    /**
-     * The creator is external, so they arrive over Slack Connect rather than as
-     * a workspace member. A failure here does not fail activation: Slack
-     * Connect depends on plan and admin policy, and an agency without it still
-     * wants every other step to complete, with this one left visibly
-     * outstanding for a human to finish by hand.
-     */
-    if (!creator.contactEmail) return;
-    const invite = await this.providers.slack.inviteExternalByEmail(
-      channel.externalId,
-      creator.contactEmail,
-    );
-    if (!invite.invited) {
-      await this.providers.slack.postMessage(
-        channel.externalId,
-        `Could not send ${creator.stageName} a Slack Connect invite automatically (${invite.reason ?? "unknown reason"}). Invite them by hand before using this channel.`,
-      );
-    }
   }
 
   async #executeStep(
@@ -479,20 +516,6 @@ export class OnboardingService {
     run: WorkflowRun,
   ): Promise<ProvisionedResource | null> {
     const prefix = `creator:${creator.id}`;
-    if (name === "PROVISION_SLACK_CREATOR") {
-      const key = `${prefix}:slack:creator-channel:v1`;
-      const channel = await this.repository.claimProvisioningKey(
-        key,
-        await this.providers.slack.createChannel({
-          creatorId: creator.id,
-          stageSlug: creator.stageSlug,
-          audience: "creator",
-          idempotencyKey: key,
-        }),
-      );
-      await this.#populateChannel(channel, creator, "creator");
-      return channel;
-    }
     if (name === "PROVISION_SLACK_INTERNAL") {
       const key = `${prefix}:slack:internal-channel:v1`;
       const channel = await this.repository.claimProvisioningKey(
@@ -504,7 +527,7 @@ export class OnboardingService {
           idempotencyKey: key,
         }),
       );
-      await this.#populateChannel(channel, creator, "internal");
+      await this.#populateChannel(channel, creator);
       return channel;
     }
     if (name === "PROVISION_NOTION_HUB") {
@@ -542,14 +565,28 @@ export class OnboardingService {
     }
 
     if (name === "POST_WELCOME_NOTIFICATION") {
-      // Posts into the channel PROVISION_SLACK_CREATOR actually created, read
-      // from the persisted run rather than reconstructed, so this cannot post
-      // into a channel that was never provisioned.
-      const channel = run.steps.find((step) => step.name === "PROVISION_SLACK_CREATOR")?.externalId;
+      /**
+       * Addressed to the team, not to the creator, because she is not in Slack.
+       *
+       * This used to welcome her into her own channel. With no creator channel
+       * to post into, the honest message is the one that says what a person now
+       * has to do by hand — the welcome package exists, and the only route to
+       * her runs through an operator.
+       *
+       * Read from the persisted run rather than reconstructed, so it cannot
+       * post into a channel that was never provisioned.
+       */
+      const channel = run.steps.find(
+        (step) => step.name === "PROVISION_SLACK_INTERNAL",
+      )?.externalId;
       if (!channel) throw new Error("WELCOME_NOTIFICATION_WITHOUT_CHANNEL");
       await this.providers.slack.postMessage(
         channel,
-        `Welcome to Foundry, ${creator.stageName}. This channel is where your Foundry team coordinates with you.`,
+        [
+          `${creator.stageName} is provisioned and her intake has been applied.`,
+          `Her welcome package is ready on her Creator 360 page — send it to her yourself.`,
+          `She is not in Slack: a free workspace cannot invite an external person to a channel.`,
+        ].join(" "),
       );
       return null;
     }
@@ -583,10 +620,10 @@ export class OnboardingService {
       return null;
     }
 
-    // LOCK_IDEMPOTENCY and AWAIT_BASELINE_READINESS are genuinely control-flow
-    // only: the first is satisfied by the database's one-active-run index, the
-    // second is the gate handled in advance(). They are the only two steps that
-    // legitimately do no work.
+    // LOCK_IDEMPOTENCY, AWAIT_INTAKE and AWAIT_BASELINE_READINESS are genuinely
+    // control-flow only: the first is satisfied by the database's one-active-run
+    // index, the other two are the gates handled in advance() via AWAIT_GATES.
+    // They are the only three steps that legitimately do no work.
     return null;
   }
 }

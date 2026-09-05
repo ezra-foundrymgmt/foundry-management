@@ -28,6 +28,7 @@ const madison: OnboardingCreator = {
   assignedTeam: true,
   teamSlackUserIds: ["U_EZRA", "U_PAYTON"],
   boundariesCollected: true,
+  intakeApplied: true,
   baselineReady: false,
 };
 
@@ -48,7 +49,7 @@ describe("CREATOR_ACTIVATION_V1", () => {
     const run = await service.start(madison);
     expect(run.status).toBe("WAITING_EXTERNAL");
     expect(run.steps).toHaveLength(26);
-    expect(run.steps.find((step) => step.name === "PROVISION_SLACK_CREATOR")?.provider).toBe(
+    expect(run.steps.find((step) => step.name === "PROVISION_SLACK_INTERNAL")?.provider).toBe(
       "SLACK",
     );
     expect(run.steps.find((step) => step.name === "AWAIT_BASELINE_READINESS")?.status).toBe(
@@ -67,11 +68,11 @@ describe("CREATOR_ACTIVATION_V1", () => {
     const { service } = setup();
     const waiting = await service.start(madison);
     const slackAttempts = waiting.steps.find(
-      (step) => step.name === "PROVISION_SLACK_CREATOR",
+      (step) => step.name === "PROVISION_SLACK_INTERNAL",
     )?.attempts;
     const completed = await service.resume(waiting, { ...madison, baselineReady: true });
     expect(completed.status).toBe("SUCCEEDED");
-    expect(completed.steps.find((step) => step.name === "PROVISION_SLACK_CREATOR")?.attempts).toBe(
+    expect(completed.steps.find((step) => step.name === "PROVISION_SLACK_INTERNAL")?.attempts).toBe(
       slackAttempts,
     );
   });
@@ -145,11 +146,12 @@ describe("CREATOR_ACTIVATION_V1", () => {
     });
     let run = await service.start({ ...madison, baselineReady: true });
     expect(run.status).toBe("SUCCEEDED");
-    expect(slack.attempts).toBe(2);
+    expect(slack.attempts).toBe(1);
+    // One channel, not two: there is no creator channel on a free workspace.
     // Advancing a completed run is a no-op, not a second round of provisioning.
     run = await service.advance(run, { ...madison, baselineReady: true });
     expect(run.status).toBe("SUCCEEDED");
-    expect(slack.attempts).toBe(2);
+    expect(slack.attempts).toBe(1);
   });
 
   it("actually performs the CreatorOS bookkeeping steps rather than marking them done", async () => {
@@ -203,14 +205,17 @@ describe("CREATOR_ACTIVATION_V1", () => {
       files: new MockFileStorageProvider(),
     });
     const run = await service.start({ ...madison, baselineReady: true });
-    const creatorChannel = run.steps.find(
-      (step) => step.name === "PROVISION_SLACK_CREATOR",
+    const internalChannel = run.steps.find(
+      (step) => step.name === "PROVISION_SLACK_INTERNAL",
     )?.externalId;
     expect(posts).toHaveLength(1);
     // Read from the persisted run, so it cannot post into a channel that was
-    // never provisioned or into the internal channel by mistake.
-    expect(posts[0]?.channel).toBe(creatorChannel);
+    // never provisioned. It is addressed to the team, not to the creator, and
+    // says so -- she is not in Slack at all.
+    expect(posts[0]?.channel).toBe(internalChannel);
     expect(posts[0]?.message).toContain("Madison Carter");
+    expect(posts[0]?.message).toMatch(/send it to her yourself/i);
+    expect(posts[0]?.message).toMatch(/not in Slack/i);
   });
 
   it("does not repeat completed bookkeeping when a run is resumed", async () => {
@@ -320,11 +325,11 @@ describe("CREATOR_ACTIVATION_V1", () => {
     expect(failed.steps.find((step) => step.name === "PROVISION_NOTION_HUB")?.error).toBe(
       "NOTION_TEMPORARY_FAILURE",
     );
-    expect(slack.attempts).toBe(2);
+    expect(slack.attempts).toBe(1);
 
     const resumed = await service.resume(failed, madison);
     expect(resumed.status).toBe("WAITING_EXTERNAL");
-    expect(slack.attempts).toBe(2);
+    expect(slack.attempts).toBe(1);
     expect(notion.hubAttempts).toBe(2);
   });
 });
@@ -356,34 +361,36 @@ describe("creator Slack channels get the right people in them", () => {
     return run.steps.find((s) => s.name === step)?.externalId ?? "";
   }
 
-  it("puts the Foundry team in both channels", async () => {
+  it("puts the Foundry team in the internal channel", async () => {
     const { service, slack } = setup();
     const run = await service.start(madison);
-
-    for (const step of ["PROVISION_SLACK_CREATOR", "PROVISION_SLACK_INTERNAL"]) {
-      const channel = channelIdFor(run, step);
-      expect(channel, step).not.toBe("");
-      expect(slack.invited.get(channel), step).toEqual(["U_EZRA", "U_PAYTON"]);
-    }
+    const channel = channelIdFor(run, "PROVISION_SLACK_INTERNAL");
+    expect(channel).not.toBe("");
+    expect(slack.invited.get(channel)).toEqual(["U_EZRA", "U_PAYTON"]);
   });
 
-  it("invites the creator to their own channel over Slack Connect", async () => {
-    const { service, slack } = setup();
+  it("creates exactly one channel, and it is the internal one", async () => {
+    const { service } = setup();
     const run = await service.start(madison);
-    const creatorChannel = channelIdFor(run, "PROVISION_SLACK_CREATOR");
-    expect(slack.externalInvites.get(creatorChannel)).toEqual(["madison@example.test"]);
+    const slackSteps = run.steps.filter((step) => step.provider === "SLACK");
+    expect(slackSteps.map((step) => step.name)).toEqual(["PROVISION_SLACK_INTERNAL"]);
   });
 
   /**
-   * The one rule that must never bend. The internal channel is the team talking
-   * ABOUT the creator; putting them in it would expose candid notes, health
-   * scores and P&L discussion to the person they are about.
+   * The rule that used to be "never the internal channel" is now simply "never".
+   *
+   * A free Slack workspace cannot originate a Slack Connect invitation, and
+   * adding a creator as a full member would let her browse the People directory
+   * and see every other creator Foundry manages. So no channel this workflow
+   * creates may ever carry an external invite — asserted across every channel
+   * rather than by name, so a future channel cannot quietly opt out of it.
    */
-  it("never invites the creator to the internal channel", async () => {
+  it("never invites the creator to any channel", async () => {
     const { service, slack } = setup();
     const run = await service.start(madison);
-    const internal = channelIdFor(run, "PROVISION_SLACK_INTERNAL");
-    expect(slack.externalInvites.get(internal)).toBeUndefined();
+    for (const step of run.steps.filter((candidate) => candidate.provider === "SLACK"))
+      expect(slack.externalInvites.get(step.externalId ?? ""), step.name).toBeUndefined();
+    expect([...slack.externalInvites.keys()]).toEqual([]);
   });
 
   it("still provisions when nobody has linked a Slack identity yet", async () => {
@@ -391,13 +398,72 @@ describe("creator Slack channels get the right people in them", () => {
     // channel empty rather than failing the whole activation.
     const { service, slack } = setup();
     const run = await service.start({ ...madison, teamSlackUserIds: [] });
-    expect(run.steps.find((s) => s.name === "PROVISION_SLACK_CREATOR")?.status).toBe("SUCCEEDED");
-    expect(slack.invited.get(channelIdFor(run, "PROVISION_SLACK_CREATOR"))).toEqual([]);
+    expect(run.steps.find((s) => s.name === "PROVISION_SLACK_INTERNAL")?.status).toBe("SUCCEEDED");
+    expect(slack.invited.get(channelIdFor(run, "PROVISION_SLACK_INTERNAL"))).toEqual([]);
   });
 
-  it("does not attempt a Slack Connect invite when no email is on file", async () => {
+  it("says in the channel topic that the creator cannot read it", async () => {
+    // With no creator channel, this sentence is the only thing telling a reader
+    // that what they write here is not visible to the person it is about.
     const { service, slack } = setup();
-    const run = await service.start({ ...madison, contactEmail: null });
-    expect(slack.externalInvites.get(channelIdFor(run, "PROVISION_SLACK_CREATOR"))).toBeUndefined();
+    const run = await service.start(madison);
+    const topic = slack.topics.get(channelIdFor(run, "PROVISION_SLACK_INTERNAL"));
+    expect(topic).toContain("Madison Carter");
+    expect(topic).toMatch(/not in this channel/i);
+  });
+});
+
+/**
+ * AWAIT_INTAKE parks the run until a creator's Model Information Sheet has been
+ * reviewed and applied, and it is placed before the welcome package because the
+ * package quotes her boundaries back to her.
+ */
+describe("AWAIT_INTAKE", () => {
+  it("parks before the welcome package when no intake has been applied", async () => {
+    const { service } = setup();
+    const run = await service.start({ ...madison, intakeApplied: false, baselineReady: true });
+
+    expect(run.status).toBe("WAITING_EXTERNAL");
+    expect(run.steps.find((step) => step.name === "AWAIT_INTAKE")?.status).toBe("WAITING_EXTERNAL");
+    // The package must not have been composed yet: composed now, it would tell
+    // her Foundry has recorded nothing about what she will not do.
+    expect(run.steps.find((step) => step.name === "GENERATE_WELCOME_PACKAGE")?.status).toBe(
+      "PENDING",
+    );
+  });
+
+  it("proceeds once the intake is applied", async () => {
+    const { service } = setup();
+    const waiting = await service.start({
+      ...madison,
+      intakeApplied: false,
+      baselineReady: true,
+    });
+    const completed = await service.resume(waiting, { ...madison, baselineReady: true });
+    expect(completed.status).toBe("SUCCEEDED");
+    expect(completed.steps.find((step) => step.name === "AWAIT_INTAKE")?.status).toBe("SUCCEEDED");
+  });
+
+  /**
+   * Regression shape borrowed from AWAIT_BASELINE_READINESS: a resume must
+   * re-evaluate the gate rather than skip a step that is already
+   * WAITING_EXTERNAL, or it walks straight past it.
+   */
+  it("keeps waiting when a resume arrives with the intake still unapplied", async () => {
+    const { service } = setup();
+    const waiting = await service.start({
+      ...madison,
+      intakeApplied: false,
+      baselineReady: true,
+    });
+    const stillWaiting = await service.resume(waiting, {
+      ...madison,
+      intakeApplied: false,
+      baselineReady: true,
+    });
+    expect(stillWaiting.status).toBe("WAITING_EXTERNAL");
+    expect(stillWaiting.steps.find((step) => step.name === "COMPLETE_ACTIVATION")?.status).toBe(
+      "PENDING",
+    );
   });
 });

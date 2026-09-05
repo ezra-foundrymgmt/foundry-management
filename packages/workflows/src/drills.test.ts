@@ -34,6 +34,7 @@ const madison: OnboardingCreator = {
   assignedTeam: true,
   teamSlackUserIds: ["U_EZRA", "U_PAYTON"],
   boundariesCollected: true,
+  intakeApplied: true,
   baselineReady: false,
 };
 
@@ -100,19 +101,17 @@ describe("Drill A — Slack succeeds, Notion fails", () => {
       "NOTION_TEMPORARY_FAILURE",
     );
 
-    // Both Slack channels were provisioned and their external ids persisted.
+    // The internal channel was provisioned and its external id persisted.
+    // There is only one channel now: a free Slack workspace cannot invite an
+    // external person, so no creator channel is created.
     const slackIds = externalIdsFor(failed);
-    expect(slackIds["PROVISION_SLACK_CREATOR"]).toBeTruthy();
     expect(slackIds["PROVISION_SLACK_INTERNAL"]).toBeTruthy();
-    expect(slack.calls).toBe(2);
+    expect(slack.calls).toBe(1);
 
     const resumed = await service.resume(failed, madison);
 
-    // Retry must not create a third and fourth Slack channel.
-    expect(slack.calls).toBe(2);
-    expect(externalIdsFor(resumed)["PROVISION_SLACK_CREATOR"]).toBe(
-      slackIds["PROVISION_SLACK_CREATOR"],
-    );
+    // Retry must not create a second Slack channel.
+    expect(slack.calls).toBe(1);
     expect(externalIdsFor(resumed)["PROVISION_SLACK_INTERNAL"]).toBe(
       slackIds["PROVISION_SLACK_INTERNAL"],
     );
@@ -202,8 +201,8 @@ describe("Drill D — two operators start onboarding at once", () => {
     expect(second.id).toBe(first.id);
     expect(third.id).toBe(first.id);
     expect(await repository.countRuns(madison.id)).toBe(1);
-    // Two Slack channels total, not two per concurrent request.
-    expect(slack.calls).toBe(2);
+    // One Slack channel total, not one per concurrent request.
+    expect(slack.calls).toBe(1);
     expect(notion.hubCalls).toBe(1);
     expect(notion.internalCalls).toBe(1);
   });

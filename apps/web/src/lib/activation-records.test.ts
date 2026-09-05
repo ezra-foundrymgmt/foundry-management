@@ -60,6 +60,7 @@ const creator: OnboardingCreator = {
   assignedTeam: true,
   teamSlackUserIds: ["U_EZRA", "U_PAYTON"],
   boundariesCollected: true,
+  intakeApplied: true,
   baselineReady: true,
 };
 

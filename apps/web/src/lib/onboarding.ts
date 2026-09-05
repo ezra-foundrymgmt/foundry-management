@@ -30,6 +30,7 @@ export const onboardingCreators: Record<string, OnboardingCreator> = {
     assignedTeam: true,
     teamSlackUserIds: [],
     boundariesCollected: true,
+    intakeApplied: true,
     baselineReady: false,
   },
 };

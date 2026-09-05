@@ -439,6 +439,36 @@ export async function applyIntakeSubmission(
     });
   }
 
+  /**
+   * Nudges an activation parked at AWAIT_INTAKE.
+   *
+   * Best-effort on purpose. Most applies have no parked run behind them — a
+   * creator who was activated months ago, or one whose intake arrives before
+   * anyone starts her activation — and `resumeCreatorActivation` throws
+   * NO_RESUMABLE_RUN for exactly those. Letting that failure undo an apply that
+   * already wrote her boundaries would be strictly worse than a run that waits
+   * for the next resume, which the workflows page can send by hand.
+   *
+   * Imported lazily so the intake module does not drag the Inngest client into
+   * every caller that only wants to read submissions.
+   */
+  try {
+    const { resumeCreatorActivation } = await import("@/lib/activation-commands");
+    await resumeCreatorActivation(session, {
+      creatorId,
+      correlationId: `intake-${submissionId}`,
+    });
+    logEvent("info", "creator.intake.activation_resumed", { creatorId, submissionId });
+  } catch (resumeError) {
+    const message = resumeError instanceof Error ? resumeError.message : String(resumeError);
+    // NO_RESUMABLE_RUN is the ordinary case, not a fault, so it is not an error.
+    logEvent(message === "NO_RESUMABLE_RUN" ? "info" : "warn", "creator.intake.resume_skipped", {
+      creatorId,
+      submissionId,
+      reason: message,
+    });
+  }
+
   return { applied: true, creatorId, counts };
 }
 

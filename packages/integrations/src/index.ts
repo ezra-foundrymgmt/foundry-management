@@ -625,7 +625,9 @@ export class MockSlackProvider implements SlackProvider {
     ]);
     return Promise.resolve({ invited: true });
   }
-  setTopic(): Promise<void> {
+  readonly topics = new Map<string, string>();
+  setTopic(resourceId: string, topic: string): Promise<void> {
+    this.topics.set(resourceId, topic);
     return Promise.resolve();
   }
   postMessage(): Promise<void> {

@@ -90,7 +90,7 @@ export async function loadLiveOnboardingCreator(
     .eq("id", creatorId)
     .maybeSingle();
   if (creatorResult.error || !creatorResult.data) return null;
-  const [boundary, baseline] = await Promise.all([
+  const [boundary, baseline, intake] = await Promise.all([
     admin
       .from("creator_boundaries")
       .select("id", { count: "exact", head: true })
@@ -102,6 +102,15 @@ export async function loadLiveOnboardingCreator(
       .select("id", { count: "exact", head: true })
       .eq("organization_id", organizationId)
       .eq("creator_id", creatorId),
+    // APPLIED only. A submission that has merely arrived is not an answer --
+    // it is a thing an operator has not read yet, and AWAIT_INTAKE exists to
+    // wait for the reading, not the arrival.
+    admin
+      .from("creator_intake_submissions")
+      .select("id", { count: "exact", head: true })
+      .eq("organization_id", organizationId)
+      .eq("creator_id", creatorId)
+      .eq("status", "APPLIED"),
   ]);
   const creator = creatorRowSchema.parse(creatorResult.data);
   return {
@@ -138,6 +147,7 @@ export async function loadLiveOnboardingCreator(
     ),
     teamSlackUserIds: await resolveTeamSlackUserIds(admin, organizationId, creator),
     boundariesCollected: (boundary.count ?? 0) > 0,
+    intakeApplied: (intake.count ?? 0) > 0,
     baselineReady: (baseline.count ?? 0) > 0,
   };
 }
