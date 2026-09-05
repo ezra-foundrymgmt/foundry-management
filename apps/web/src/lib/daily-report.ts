@@ -7,7 +7,7 @@ import {
   type MetricPoint,
 } from "@creatoros/domain";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { preferOneRowPerPeriod } from "@/lib/metric-rows";
+import { distinctDays, preferOneRowPerPeriod } from "@/lib/metric-rows";
 
 const metricPointSchema = z.object({
   date: z.string(),
@@ -33,6 +33,7 @@ const revenueRowsSchema = z.array(
 
 const socialRowsSchema = z.array(
   z.object({
+    published_at: z.string().nullable().optional(),
     reach: z.coerce.number().nullable(),
     profile_visits: z.coerce.number().nullable(),
     outbound_clicks: z.coerce.number().nullable(),
@@ -173,6 +174,26 @@ const baselineUnmeasuredSchema = z.object({
 });
 
 /**
+ * How many days inside the baseline period were actually measured, as recorded
+ * by `freezeBaseline`.
+ *
+ * Separate from the calendar length of the period. A 30-day baseline built from
+ * 12 days of entered revenue holds a 12-day sum, and scaling it as though it
+ * were a 30-day sum understates it by more than half. Optional throughout:
+ * baselines frozen before this marker existed have no such key, and the caller
+ * falls back to the calendar length — the previous behaviour — rather than
+ * refusing to compare.
+ */
+const baselineCoverageSchema = z.object({
+  measuredDays: z
+    .object({
+      revenue: z.coerce.number().int().nonnegative().optional(),
+      social: z.coerce.number().int().nonnegative().optional(),
+    })
+    .optional(),
+});
+
+/**
  * Zeroes the baseline for dimensions that cannot honestly be compared.
  *
  * A zero baseline is the rules engine's existing signal for "incomparable":
@@ -190,20 +211,34 @@ function withIncomparableDimensionsZeroed(
 }
 
 /**
- * Scales a summed MetricPoint by a window ratio.
+ * Scales a summed MetricPoint onto the current window, one factor per source
+ * table.
+ *
+ * The two halves of a MetricPoint come from tables with different meanings for
+ * a day that holds no row, so one shared factor cannot be right for both:
+ *
+ * - `creator_revenue_daily` is a ledger. A creator earns on days nobody typed
+ *   in, so a missing day is an unmeasured day, and the window's sum covers
+ *   only the days that were entered.
+ * - `social_posts` is a log of events. A day with no post genuinely produced no
+ *   post reach, so the sum covers the whole window whether or not every day
+ *   holds a row.
  *
  * `date` is carried through untouched: it labels the point, it is not a
  * quantity.
  */
-function scaleMetricPoint(point: MetricPoint, factor: number): MetricPoint {
+function scaleMetricPoint(
+  point: MetricPoint,
+  factors: { social: number; revenue: number },
+): MetricPoint {
   return {
     date: point.date,
-    reach: point.reach * factor,
-    profileVisits: point.profileVisits * factor,
-    outboundClicks: point.outboundClicks * factor,
-    newSubscribers: point.newSubscribers * factor,
-    firstBuyers: point.firstBuyers * factor,
-    revenue: point.revenue * factor,
+    reach: point.reach * factors.social,
+    profileVisits: point.profileVisits * factors.social,
+    outboundClicks: point.outboundClicks * factors.social,
+    newSubscribers: point.newSubscribers * factors.revenue,
+    firstBuyers: point.firstBuyers * factors.revenue,
+    revenue: point.revenue * factors.revenue,
   };
 }
 
@@ -265,7 +300,7 @@ export async function produceDailyCreatorReport(input: {
       .order("imported_at", { ascending: true }),
     client
       .from("social_posts")
-      .select("reach,profile_visits,outbound_clicks,data_confidence")
+      .select("published_at,reach,profile_visits,outbound_clicks,data_confidence")
       .eq("organization_id", input.organizationId)
       .eq("creator_id", input.creatorId)
       .gte("published_at", `${since}T00:00:00.000Z`)
@@ -313,8 +348,45 @@ export async function produceDailyCreatorReport(input: {
    * subscribers, 1000 reach -- meaningful against the window actually measured.
    */
   const baselineDays = periodLengthInDays(baselineRow?.period_start, baselineRow?.period_end);
-  const scaled =
-    baselineDays === null ? baseline.data : scaleMetricPoint(baseline.data, CURRENT_WINDOW_DAYS / baselineDays);
+
+  /**
+   * How much of the window each side actually measured.
+   *
+   * The revenue half of the comparison was being scaled as though the current
+   * window held all seven days no matter how many were entered. Foundry types
+   * revenue in by hand, so on any day before the week is fully entered — which
+   * is most days, and every day for a creator onboarded mid-week — a two-day
+   * sum was compared against a seven-day baseline slice. A creator performing
+   * exactly at baseline read as a 71% revenue collapse, and that number is
+   * printed on a report a creator sees.
+   *
+   * Comparing measured days against measured days removes the mismatch without
+   * inventing the missing days: two entered days are compared against two
+   * baseline days, and the report says so.
+   */
+  const revenueMeasuredDays = distinctDays(revenueRows.map((row) => row.date));
+  const socialMeasuredDays = distinctDays(socialRows.map((row) => row.published_at));
+  const storedCoverage = baselineCoverageSchema.safeParse(baselineRow?.metrics_json);
+  const baselineRevenueDays = storedCoverage.success
+    ? (storedCoverage.data.measuredDays?.revenue ?? baselineDays)
+    : baselineDays;
+
+  /**
+   * A factor of 1 means "compare unscaled". It is the fallback for a baseline
+   * whose period cannot be read, and it is wrong — but it is the behaviour
+   * that predates any scaling, it is recorded in the report's data quality,
+   * and refusing outright would withhold the whole report over one unreadable
+   * column.
+   */
+  const socialFactor = baselineDays === null ? 1 : CURRENT_WINDOW_DAYS / baselineDays;
+  const revenueFactor =
+    baselineRevenueDays === null || baselineRevenueDays <= 0
+      ? 1
+      : revenueMeasuredDays / baselineRevenueDays;
+  const scaled = scaleMetricPoint(baseline.data, {
+    social: socialFactor,
+    revenue: revenueFactor,
+  });
 
   /**
    * A dimension nobody measured must not be compared as though it read zero.
@@ -388,14 +460,24 @@ export async function produceDailyCreatorReport(input: {
         // built on partial data from one built on complete data.
         data_quality_json: {
           ruleId: report.ruleId,
-          revenueDays: revenueRows.length,
+          revenueDays: revenueMeasuredDays,
+          socialDays: socialMeasuredDays,
           socialPosts: socialRows.length,
+          revenueRows: revenueRows.length,
           comparisons: report.comparisons,
           // What the percentages were actually computed against, so a report
           // can explain its own comparison after the fact.
           currentWindowDays: CURRENT_WINDOW_DAYS,
           baselineWindowDays: baselineDays,
+          baselineRevenueDays,
           baselineScaledToWindow: baselineDays !== null,
+          /**
+           * The two factors the baseline was multiplied by. A reader who wants
+           * to know why a percentage says what it says needs the arithmetic,
+           * not a boolean — and the revenue factor is the one that moves with
+           * how much of the week has been entered.
+           */
+          baselineScaleFactors: { social: socialFactor, revenue: revenueFactor },
           /**
            * Which dimensions this report did NOT compare, and why. Without
            * this the report shows a percentage for some dimensions and

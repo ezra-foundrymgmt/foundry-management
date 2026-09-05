@@ -107,5 +107,31 @@ function beats(candidate: SourcedRow, incumbent: SourcedRow): boolean {
   return candidateAt > incumbentAt;
 }
 
+/**
+ * How many distinct UTC calendar days a set of timestamps actually covers.
+ *
+ * Not the row count, which is what both the report producer and the baseline
+ * freezer were recording under a field named `revenueDays`.
+ * `creator_revenue_daily` is keyed per creator-day-platform, so a creator
+ * selling on two platforms produces two rows for one day; `social_posts` holds
+ * one row per post, so three posts on a Tuesday are one measured day, not
+ * three. The report scales a frozen baseline by this number, so a row count
+ * standing in for a day count scales the comparison by the wrong factor.
+ *
+ * Accepts both `YYYY-MM-DD` dates and full timestamps, because the two tables
+ * store the two shapes. Anything unparseable is skipped rather than counted:
+ * an unreadable timestamp is not evidence of a measured day.
+ */
+export function distinctDays(values: ReadonlyArray<string | null | undefined>): number {
+  const days = new Set<string>();
+  for (const value of values) {
+    if (!value) continue;
+    const parsed = Date.parse(value.length === 10 ? `${value}T00:00:00.000Z` : value);
+    if (!Number.isFinite(parsed)) continue;
+    days.add(new Date(parsed).toISOString().slice(0, 10));
+  }
+  return days.size;
+}
+
 /** Re-exported so callers can type a confidence without reaching for domain. */
 export type { DataConfidence };

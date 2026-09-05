@@ -4,7 +4,7 @@ import type { AppSession } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { appendAudit } from "@/lib/audit";
 import { logEvent } from "@/lib/observability";
-import { preferOneRowPerPeriod } from "@/lib/metric-rows";
+import { distinctDays, preferOneRowPerPeriod } from "@/lib/metric-rows";
 
 /**
  * Freezes the creator's own normal, which every later report is measured against.
@@ -64,6 +64,7 @@ const revenueRowsSchema = z.array(
 
 const socialRowsSchema = z.array(
   z.object({
+    published_at: z.string().nullable().optional(),
     reach: z.coerce.number().nullable(),
     profile_visits: z.coerce.number().nullable(),
     outbound_clicks: z.coerce.number().nullable(),
@@ -114,7 +115,7 @@ export async function freezeBaseline(
       .order("imported_at", { ascending: true }),
     client
       .from("social_posts")
-      .select("reach,profile_visits,outbound_clicks")
+      .select("published_at,reach,profile_visits,outbound_clicks")
       .eq("organization_id", session.organizationId)
       .eq("creator_id", creatorId)
       .gte("published_at", `${input.periodStart}T00:00:00Z`)
@@ -151,6 +152,26 @@ export async function freezeBaseline(
     ...(socialRows.length === 0 ? ["reach", "profileVisits", "outboundClicks"] : []),
     ...(revenueRows.length === 0 ? ["newSubscribers", "firstBuyers", "revenue"] : []),
   ];
+
+  /**
+   * How much of the chosen period was actually measured, frozen alongside the
+   * sums it explains.
+   *
+   * The period is a calendar range an operator picks; what got summed is
+   * whatever rows exist inside it. A 30-day baseline built from 12 entered days
+   * holds a 12-day revenue sum, and the daily report — which scales this
+   * baseline onto its own window before comparing — has no way to tell the two
+   * apart from `period_start`/`period_end` alone. It assumed 30, understating
+   * the baseline by more than half and reporting the gap as creator
+   * performance.
+   *
+   * `unmeasuredDimensions` already records which dimensions have nothing at
+   * all; this records how thin the ones that do have something are.
+   */
+  const measuredDays = {
+    revenue: distinctDays(revenueRows.map((row) => row.date)),
+    social: distinctDays(socialRows.map((row) => row.published_at)),
+  };
 
   // `unique(creator_id, baseline_type, version)`: a re-freeze is a new
   // version, never an overwrite. The previous baseline stays readable, so a
@@ -191,7 +212,7 @@ export async function freezeBaseline(
        * reader months from now tell a creator who got no reach from a creator
        * whose reach was never ingested.
        */
-      metrics_json: { ...metrics, unmeasuredDimensions },
+      metrics_json: { ...metrics, unmeasuredDimensions, measuredDays },
       frozen_at: frozenAt,
       created_by: session.userId,
     })
@@ -209,7 +230,8 @@ export async function freezeBaseline(
       version,
       periodStart: input.periodStart,
       periodEnd: input.periodEnd,
-      revenueDays: revenueRows.length,
+      revenueDays: measuredDays.revenue,
+      socialDays: measuredDays.social,
       socialPosts: socialRows.length,
       unmeasuredDimensions,
     });
@@ -228,7 +250,8 @@ export async function freezeBaseline(
     periodStart: input.periodStart,
     periodEnd: input.periodEnd,
     metrics,
-    revenueDays: revenueRows.length,
+    revenueDays: measuredDays.revenue,
+    socialDays: measuredDays.social,
     socialPosts: socialRows.length,
     unmeasuredDimensions,
     frozenAt,

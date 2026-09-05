@@ -582,3 +582,169 @@ describe("a dimension nobody measured is not compared as though it read zero", (
     expect(result.produced).toBe(true);
   });
 });
+
+/**
+ * A window nobody has finished entering must not read as a window in which
+ * performance collapsed.
+ *
+ * Foundry types revenue in by hand. On any day before the week is fully
+ * entered -- which is most days, and every day for a creator onboarded
+ * mid-week -- `creator_revenue_daily` holds fewer than seven days while the
+ * baseline was being scaled onto a full seven. A creator performing exactly at
+ * her own baseline read as a 71% revenue collapse, and that number is printed
+ * on a report she can be shown.
+ *
+ * The guard that existed only fired on ZERO rows, so it never saw the case
+ * that actually happens.
+ */
+describe("a partly-entered window is compared against a partly-entered baseline", () => {
+  const REPORT_DATE = "2026-09-04";
+
+  function seed(revenueRows: Array<Record<string, unknown>>, baselineExtras: object = {}) {
+    tables.set("creator_baselines", {
+      data: {
+        // 30 calendar days. 5000 over 30 days is 166.67/day.
+        metrics_json: { ...baselineMetrics, ...baselineExtras },
+        period_start: "2026-08-01",
+        period_end: "2026-08-30",
+      },
+      error: null,
+    });
+    tables.set("creator_revenue_daily", { data: revenueRows, error: null });
+    tables.set("social_posts", { data: [], error: null });
+    tables.set("daily_creator_reports", {
+      data: { id: "66666666-6666-4666-8666-666666666666" },
+      error: null,
+    });
+  }
+
+  async function quality() {
+    const result = await produceDailyCreatorReport({
+      organizationId: ORG,
+      creatorId: CREATOR,
+      reportDate: REPORT_DATE,
+    });
+    expect(result.produced).toBe(true);
+    const write = writes.find((entry) => entry.table === "daily_creator_reports");
+    return write?.payload["data_quality_json"] as {
+      comparisons: Record<string, number | null>;
+      revenueDays: number;
+      socialDays: number;
+      socialPosts: number;
+      revenueRows: number;
+      baselineRevenueDays: number | null;
+      baselineScaleFactors: { social: number; revenue: number };
+    };
+  }
+
+  it("reads two entered days of exactly baseline performance as flat, not as a collapse", async () => {
+    // 166.67/day is precisely the baseline's own daily rate.
+    seed([
+      { date: "2026-09-03", creator_platform_receipts: 166.67, new_subscribers: 3.33, first_buyers: 1 },
+      { date: "2026-09-04", creator_platform_receipts: 166.67, new_subscribers: 3.33, first_buyers: 1 },
+    ]);
+    const stored = await quality();
+
+    expect(stored.revenueDays).toBe(2);
+    // Scaled by measured days over baseline days, not by the whole window.
+    expect(stored.baselineScaleFactors.revenue).toBeCloseTo(2 / 30, 10);
+    // The old arithmetic (7/30) put this at roughly -71%.
+    expect(Math.abs(stored.comparisons["revenue"] ?? 999)).toBeLessThan(1);
+    expect(Math.abs(stored.comparisons["acquisition"] ?? 999)).toBeLessThan(1);
+  });
+
+  it("scales against the baseline's own measured days when the baseline recorded them", async () => {
+    // A 30-day period holding only 10 entered days: 5000 is a 10-day sum at
+    // 500/day, not a 30-day sum at 166.67/day.
+    seed(
+      [
+        { date: "2026-09-02", creator_platform_receipts: 500, new_subscribers: 10, first_buyers: 3 },
+        { date: "2026-09-03", creator_platform_receipts: 500, new_subscribers: 10, first_buyers: 3 },
+        { date: "2026-09-04", creator_platform_receipts: 500, new_subscribers: 10, first_buyers: 3 },
+      ],
+      { measuredDays: { revenue: 10, social: 0 } },
+    );
+    const stored = await quality();
+
+    expect(stored.baselineRevenueDays).toBe(10);
+    expect(stored.baselineScaleFactors.revenue).toBeCloseTo(3 / 10, 10);
+    // Reading the period as 30 fully-measured days would have made this +200%.
+    expect(Math.abs(stored.comparisons["revenue"] ?? 999)).toBeLessThan(1);
+  });
+
+  it("falls back to the calendar period for baselines frozen before coverage was recorded", async () => {
+    seed([
+      { date: "2026-09-04", creator_platform_receipts: 166.67, new_subscribers: 3.33, first_buyers: 1 },
+    ]);
+    const stored = await quality();
+    expect(stored.baselineRevenueDays).toBe(30);
+    expect(stored.baselineScaleFactors.revenue).toBeCloseTo(1 / 30, 10);
+  });
+
+  it("counts measured DAYS, not rows: two platforms reporting one day is one day", async () => {
+    seed([
+      {
+        date: "2026-09-04",
+        platform: "ONLYFANS",
+        creator_platform_receipts: 100,
+        new_subscribers: 2,
+        first_buyers: 1,
+      },
+      {
+        date: "2026-09-04",
+        platform: "FANSLY",
+        creator_platform_receipts: 60,
+        new_subscribers: 1,
+        first_buyers: 0,
+      },
+    ]);
+    const stored = await quality();
+
+    // Both rows are kept -- they are different platforms, not duplicates --
+    // but they describe a single measured day.
+    expect(stored.revenueRows).toBe(2);
+    expect(stored.revenueDays).toBe(1);
+    expect(stored.baselineScaleFactors.revenue).toBeCloseTo(1 / 30, 10);
+  });
+
+  /**
+   * Social is deliberately NOT scaled this way. `social_posts` is a log of
+   * events, so a day holding no row genuinely produced no post reach --
+   * unlike the revenue ledger, where a missing day means nobody typed it in.
+   * Scaling reach by posting days would hide a drop in posting cadence, which
+   * is one of the few things this report exists to catch.
+   */
+  it("keeps social on the full calendar window, because a day without a post is not a day unmeasured", async () => {
+    tables.set("creator_baselines", {
+      data: {
+        metrics_json: baselineMetrics,
+        period_start: "2026-08-01",
+        period_end: "2026-08-30",
+      },
+      error: null,
+    });
+    tables.set("creator_revenue_daily", { data: [], error: null });
+    tables.set("social_posts", {
+      data: [
+        { published_at: "2026-09-03T10:00:00Z", reach: 1000, profile_visits: 40, outbound_clicks: 9 },
+        { published_at: "2026-09-03T18:00:00Z", reach: 1000, profile_visits: 40, outbound_clicks: 9 },
+        { published_at: "2026-09-04T09:00:00Z", reach: 333, profile_visits: 10, outbound_clicks: 3 },
+      ],
+      error: null,
+    });
+    tables.set("daily_creator_reports", {
+      data: { id: "66666666-6666-4666-8666-666666666666" },
+      error: null,
+    });
+    const stored = await quality();
+
+    // Three posts across two calendar days: both are recorded, and they are
+    // different numbers.
+    expect(stored.socialPosts).toBe(3);
+    expect(stored.socialDays).toBe(2);
+    expect(stored.baselineScaleFactors.social).toBeCloseTo(7 / 30, 10);
+    // 10000 reach over 30 days scaled to 7 is 2333.3; the window measured
+    // 2333 -- flat, and unaffected by how many days held a post.
+    expect(Math.abs(stored.comparisons["reach"] ?? 999)).toBeLessThan(1);
+  });
+});
