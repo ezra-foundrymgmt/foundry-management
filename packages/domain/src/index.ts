@@ -1,3 +1,4 @@
+export * from "./creator-intake";
 export * from "./fit-score";
 export * from "./health-score";
 export * from "./limits";
