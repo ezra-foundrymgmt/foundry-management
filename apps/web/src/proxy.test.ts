@@ -32,6 +32,7 @@ describe("auth proxy matcher", () => {
       "/api/inngest",
       "/api/inngest/anything",
       "/api/slack/events",
+      "/api/intake/google-form",
       "/manifest.webmanifest",
       "/sw.js",
       "/icons/192",
@@ -50,6 +51,12 @@ describe("auth proxy matcher", () => {
       "/api/slackbot/run",
       "/api/slacks",
       "/api/slack/admin",
+      // The intake exemption is anchored with $, so no other route under
+      // /api/intake inherits it.
+      "/api/intake",
+      "/api/intake/google-form/apply",
+      "/api/intake/google-forms",
+      "/api/intake-admin/export",
       "/api/healthz",
       "/api/health-internal",
       "/api/inngestx",

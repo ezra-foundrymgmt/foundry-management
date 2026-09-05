@@ -40,6 +40,15 @@ const schema = z.object({
   NOTION_CLIENT_SECRET: optionalSecret,
   NOTION_REDIRECT_URI: optionalUrl,
   INTEGRATION_ENCRYPTION_KEY: optionalSecret,
+  /**
+   * Shared with the Apps Script bound to the creator intake Google Form. It
+   * authenticates the TRANSPORT only — that a POST came from something holding
+   * the secret. It says nothing about who filled the form in, because a Google
+   * Form prefill is a visible, editable field and can never authenticate a
+   * person. Absent means the intake endpoint refuses every request rather than
+   * accepting unsigned ones.
+   */
+  CREATOR_INTAKE_SIGNING_SECRET: optionalSecret,
   ANTHROPIC_API_KEY: optionalSecret,
   FOUNDRY_AGENT_MODEL: z.preprocess(
     blankToUndefined,

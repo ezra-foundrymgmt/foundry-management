@@ -62,6 +62,11 @@ export const config = {
     // signature rather than a session cookie; redirecting it to /login would
     // break the endpoint and Slack would retry the redirect forever. api/inngest
     // authenticates with its signing key for the same reason.
-    "/((?!_next/static/|_next/image/|favicon\\.ico$|manifest\\.webmanifest$|sw\\.js$|icons/|api/health$|api/inngest$|api/inngest/|api/slack/events$).*)",
+    //
+    // api/intake/google-form is the third of these: the Apps Script bound to
+    // the creator intake form signs its POST with a shared secret and carries
+    // no cookie. Note the `$` — it exempts exactly this endpoint, so a future
+    // /api/intake/anything-else is still behind the session check by default.
+    "/((?!_next/static/|_next/image/|favicon\\.ico$|manifest\\.webmanifest$|sw\\.js$|icons/|api/health$|api/inngest$|api/inngest/|api/slack/events$|api/intake/google-form$).*)",
   ],
 };
